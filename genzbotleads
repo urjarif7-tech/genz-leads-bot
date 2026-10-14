@@ -1,0 +1,107 @@
+import time
+import requests
+from telebot import TeleBot
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+BOT_TOKEN = "8809930723:AAH2LExR_Mkn3Y-PfuojEL8sOQIiQJa0Tsc"
+bot = TeleBot(BOT_TOKEN)
+bot.remove_webhook()
+TOTAL_PAGES = 5  # মোট ৫টি পেজ রয়েছে
+
+
+# ওয়েবসাইটের ডাটা ফেচ করার ফাংশন
+def get_live_leads_data(page=1):
+    url = f"https://genzreward.com/live/leads?page={page}"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        return data
+    except Exception as e:
+        return None
+
+
+# মেসেজ টেক্সট ফরম্যাট
+def format_leads_message(leads_data, page=1):
+    text = f"📊 **LIVE LEADS — Page {page}/{TOTAL_PAGES} (updated just now)**\n\n"
+
+    if not leads_data:
+        return text + "No data available."
+
+    for item in leads_data:
+        text += f"**Email:** {item.get('email')}\n"
+        text += f"**Provider:** {item.get('provider')}\n"
+        text += f"**Name:** {item.get('name')}\n"
+        text += f"**Time:** {item.get('time')}\n"
+        text += f"**Points:** {item.get('points')}\n"
+        text += f"**Created at:** {item.get('created_at')}\n\n"
+
+    return text
+
+
+# ১ থেকে ৫ নম্বর পেজের জন্য ডাইনামিক বাটন তৈরির ফাংশন
+def get_leads_keyboard(page=1):
+    markup = InlineKeyboardMarkup()
+
+    # Refresh Button
+    btn_refresh = InlineKeyboardButton(
+        "🔄 Refresh", callback_data=f"refresh_{page}"
+    )
+
+    # Next & Back Navigation Logic
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(
+            InlineKeyboardButton("⬅️ Back", callback_data=f"page_{page-1}")
+        )
+    if page < TOTAL_PAGES:
+        nav_buttons.append(
+            InlineKeyboardButton("➡️ Next", callback_data=f"page_{page+1}")
+        )
+
+    markup.row(btn_refresh)
+    if nav_buttons:
+        markup.row(*nav_buttons)
+
+    return markup
+
+
+# ১. মেনু থেকে "Live Leads" এ ক্লিক করলে (Page 1)
+@bot.callback_query_handler(func=lambda call: call.data == "live_leads")
+def initial_live_leads(call):
+    data = get_live_leads_data(page=1)
+    msg_text = format_leads_message(data, page=1)
+    bot.send_message(
+        call.message.chat.id,
+        msg_text,
+        reply_markup=get_leads_keyboard(1),
+        parse_mode="Markdown",
+    )
+
+
+# ২. "Next", "Back", বা "Refresh" বাটনে ক্লিক করলে
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith(("page_", "refresh_"))
+)@bot.callback_query_handler(func=lambda call: True)
+def handle_pagination_and_refresh(call):
+    action, page_num = call.data.split("_")
+    page = int(page_num)
+
+    # নতুন পেজের ডাটা আনা
+    data = get_live_leads_data(page=page)
+    msg_text = format_leads_message(data, page=page)
+
+    # বিদ্যমান মেসেজটি আপডেট করা (একই মেসেজের ভেতর পরিবর্তন হবে)
+    try:
+        bot.edit_message_text(
+            msg_text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=get_leads_keyboard(page),
+            parse_mode="Markdown",
+        )
+        bot.answer_callback_query(call.id, text=f"Loaded Page {page}")
+    except Exception as e:
+        bot.answer_callback_query(call.id, text="Already up to date!")
+
+
+bot.polling()
