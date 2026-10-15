@@ -26,6 +26,20 @@ API_URL = "https://genzreward.com/api/live-leads-bot"
 
 seen_lead_ids = set()
 
+def fetch_api_leads():
+    try:
+        response = requests.get(API_URL, timeout=10)
+        if response.status_code == 200:
+            json_data = response.json()
+            # API Response Format Handle (array or object inside data/leads)
+            if isinstance(json_data, list):
+                return json_data
+            elif isinstance(json_data, dict):
+                return json_data.get('data', json_data.get('leads', []))
+    except Exception as e:
+        print(f"API Fetch Error: {e}")
+    return []
+
 def build_pagination_keyboard(page=1, total_pages=1):
     markup = InlineKeyboardMarkup()
     buttons = []
@@ -44,7 +58,7 @@ def build_pagination_keyboard(page=1, total_pages=1):
 def get_lead_page_text(leads, page=1, per_page=3):
     total_leads = len(leads)
     if total_leads == 0:
-        return "❌ No live leads found at the moment.", 0
+        return "❌ Currently no live leads found in API.", 0
     
     total_pages = (total_leads + per_page - 1) // per_page
     page = max(1, min(page, total_pages))
@@ -86,65 +100,58 @@ def send_welcome(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("page_"))
 def handle_pagination(call):
     page = int(call.data.split("_")[1])
+    leads = fetch_api_leads()
+    
+    if not leads:
+        bot.answer_callback_query(call.id, "No leads available.")
+        bot.send_message(call.message.chat.id, "❌ No live leads found at the moment.")
+        return
+
+    text, total_pages = get_lead_page_text(leads, page=page, per_page=3)
+    markup = build_pagination_keyboard(page, total_pages)
+    
+    bot.answer_callback_query(call.id, f"Loaded Page {page}")
+    
+    # Try updating message text, if it fails then send new message
     try:
-        response = requests.get(API_URL, timeout=10)
-        if response.status_code == 200:
-            json_data = response.json()
-            leads = json_data.get('data', [])
-            
-            text, total_pages = get_lead_page_text(leads, page=page, per_page=3)
-            
-            if total_pages == 0:
-                bot.answer_callback_query(call.id, "No leads available.")
-                bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
-                return
+        bot.edit_message_text(
+            text, 
+            call.message.chat.id, 
+            call.message.message_id, 
+            parse_mode="Markdown", 
+            reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id,
+            text,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
 
-            markup = build_pagination_keyboard(page, total_pages)
-            bot.answer_callback_query(call.id, f"Loaded Page {page}")
-            bot.edit_message_text(
-                text, 
-                call.message.chat.id, 
-                call.message.message_id, 
-                parse_mode="Markdown", 
-                reply_markup=markup
-            )
-        else:
-            bot.answer_callback_query(call.id, "Failed to connect to API.")
-
-    except Exception as e:
-        bot.answer_callback_query(call.id, "Error fetching leads.")
-        print(f"Callback Error: {e}")
-
-# Background Auto Loop for New Leads
+# Background Auto Loop for New Leads Notification
 def fetch_and_send_leads():
-    try:
-        response = requests.get(API_URL, timeout=10)
-        if response.status_code == 200:
-            json_data = response.json()
-            leads = json_data.get('data', [])
-
-            for lead in reversed(leads):
-                lead_id = lead.get('id')
+    leads = fetch_api_leads()
+    if leads:
+        for lead in reversed(leads):
+            lead_id = lead.get('id')
+            
+            if lead_id and lead_id not in seen_lead_ids:
+                offer_name = lead.get('offer_name', 'N/A')
+                provider = lead.get('provider', 'N/A')
+                points = lead.get('points', '0')
+                user_id = lead.get('user_id', 'N/A')
                 
-                if lead_id and lead_id not in seen_lead_ids:
-                    offer_name = lead.get('offer_name', 'N/A')
-                    provider = lead.get('provider', 'N/A')
-                    points = lead.get('points', '0')
-                    user_id = lead.get('user_id', 'N/A')
-                    
-                    msg = (
-                        f"🎯 **New Lead Completed!**\n\n"
-                        f"👤 **User ID:** `{user_id}`\n"
-                        f"📌 **Offer:** {offer_name}\n"
-                        f"🌐 **Provider:** {provider}\n"
-                        f"💰 **Reward:** {points} Points\n"
-                    )
-                    
-                    bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                    seen_lead_ids.add(lead_id)
-
-    except Exception as e:
-        print(f"Error fetching leads: {e}")
+                msg = (
+                    f"🎯 **New Lead Completed!**\n\n"
+                    f"👤 **User ID:** `{user_id}`\n"
+                    f"📌 **Offer:** {offer_name}\n"
+                    f"🌐 **Provider:** {provider}\n"
+                    f"💰 **Reward:** {points} Points\n"
+                )
+                
+                bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+                seen_lead_ids.add(lead_id)
 
 def auto_loop():
     while True:
