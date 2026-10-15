@@ -48,19 +48,19 @@ def build_lead_message(data):
     # 1. Row 1: Refresh Button (Full width)
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
 
-    # 2. Row 2: Prev & Next Buttons (Side by side)
+    # 2. Row 2: Dynamic Prev & Next Buttons
     nav_buttons = []
+    
+    # শুধু ২ নম্বর বা তার পরের পেজে গেলে Prev বাটন আসবে
     if current_page > 1:
         nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{current_page - 1}"))
-    else:
-        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data="noop"))
 
+    # শেষ পেজ না হওয়া পর্যন্ত Next বাটন থাকবে
     if current_page < last_page:
         nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"page_{current_page + 1}"))
-    else:
-        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data="noop"))
 
-    markup.row(*nav_buttons)
+    if nav_buttons:
+        markup.row(*nav_buttons)
 
     # 3. Row 3: Back Button (Welcome screen-e niye jabe)
     markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
