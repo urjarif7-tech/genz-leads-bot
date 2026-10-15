@@ -5,7 +5,7 @@ from flask import Flask
 import requests
 import telebot
 
-# Render Free Tier 24/7 রাখার জন্য Web Server (Flask)
+# Render Free Tier Web Server Setup
 app = Flask('')
 
 @app.route('/')
@@ -23,7 +23,7 @@ def keep_alive():
 
 # Telegram Configuration
 BOT_TOKEN = "8809930723:AAH2LExR_Mkn3Y-PfuojEL8sOQIiQJa0Tsc"
-CHAT_ID = 7089010379  # আপনার Personal Chat ID (পরে গ্রুপ আইডি দিয়ে পরিবর্তন করতে পারবেন)
+CHAT_ID = 7089010379  # আপনার Personal Chat ID
 
 bot = telebot.TeleBot(BOT_TOKEN)
 API_URL = "https://genzreward.com/api/live-leads-bot"
@@ -61,8 +61,8 @@ def fetch_and_send_leads():
         print(f"Error fetching leads: {e}")
 
 if __name__ == "__main__":
-    keep_alive()  # Web Server চালু হবে
-    print("Bot is running...")
+    keep_alive()  # Flask server thread-এ ব্যাকগ্রাউন্ডে চালু হবে
+    print("Bot loop started...")
     while True:
         fetch_and_send_leads()
         time.sleep(15)  # প্রতি ১৫ সেকেন্ড পরপর চেক করবে
