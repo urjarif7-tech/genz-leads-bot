@@ -40,8 +40,7 @@ def build_lead_message(data):
         message_text += f"📌 Offer: {offer_name}\n"
         message_text += f"🌐 Provider: {provider}\n"
         message_text += f"💰 Reward: {points} Points\n"
-        message_text += f"⏱️ Time: {time_ago}\n"
-        message_text += f"-----------------------------------\n"
+        message_text += f"⏱️ Time: {time_ago}\n\n"  # এখানে দাগের বদলে নিউলাইন (\n) দিয়ে ফাঁকা রাখা হয়েছে
 
     markup = types.InlineKeyboardMarkup()
 
@@ -51,11 +50,9 @@ def build_lead_message(data):
     # 2. Row 2: Dynamic Prev & Next Buttons
     nav_buttons = []
     
-    # শুধু ২ নম্বর বা তার পরের পেজে গেলে Prev বাটন আসবে
     if current_page > 1:
         nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{current_page - 1}"))
 
-    # শেষ পেজ না হওয়া পর্যন্ত Next বাটন থাকবে
     if current_page < last_page:
         nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"page_{current_page + 1}"))
 
