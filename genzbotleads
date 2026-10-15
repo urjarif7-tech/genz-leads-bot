@@ -3,7 +3,8 @@ import requests
 from flask import Flask
 from telebot import TeleBot, types
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAH2LExR_Mkn3Y-PfuojEL8sOQIiQJa0Tsc')
+# New Bot Token updated
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAFTySiiJuCRAE8d5FReU42XRXRNf3UVvRI')
 API_URL = 'https://genzreward.com/api/live-leads-bot'
 
 bot = TeleBot(BOT_TOKEN)
@@ -57,7 +58,6 @@ def build_lead_message(data):
     markup.row(*buttons)
     return message_text, markup
 
-# /start দিলে ওয়েলকাম মেসেজ ও বাটন দেখাবে
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = types.InlineKeyboardMarkup()
@@ -67,14 +67,12 @@ def send_welcome(message):
     welcome_text = "👋 **Welcome to Live Leads Bot!**\n\nClick the button below to view live leads."
     bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
 
-# /leads অথবা "🎯 Live Leads" বাটনে চাপ দিলে লিড দেখাবে
 @bot.message_handler(commands=['leads'])
-@bot.message_handler(func=lambda message: message.text == "🎯 Live Leads")
 def send_leads(message):
     data = fetch_leads(page=1)
     if data:
         msg_text, markup = build_lead_message(data)
-        bot.send_message(message.chat.id, msg_text, parse_mode='Markdown', reply_markup=markup)
+        bot.send_message(message.chat.id, msg_text, reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "❌ Could not fetch live leads. Please try again later.")
 
@@ -90,7 +88,6 @@ def handle_pagination(call):
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
                 text=msg_text,
-                parse_mode='Markdown',
                 reply_markup=markup
             )
             bot.answer_callback_query(call.id, text="🔄 Refreshed!")
