@@ -22,7 +22,7 @@ def fetch_leads(page=1):
 def build_lead_message(data):
     leads = data.get('data', [])
     current_page = data.get('current_page', 1)
-    last_page = data.get('last_page', 1)
+    last_page = min(data.get('last_page', 1), 5) # সর্বোচ্চ ৫টি পেজে ফিক্সড রাখা হলো
 
     if not leads:
         return "🎯 No Live Leads Found!", None
@@ -43,7 +43,6 @@ def build_lead_message(data):
         message_text += f"⏱️ Time: {time_ago}\n"
         message_text += f"-----------------------------------\n"
 
-    # Nex-Labs style full-width vertical layout
     markup = types.InlineKeyboardMarkup()
 
     # 🔄 Refresh Button (Always on top)
