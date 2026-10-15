@@ -22,7 +22,7 @@ def fetch_leads(page=1):
 def build_lead_message(data):
     leads = data.get('data', [])
     current_page = data.get('current_page', 1)
-    last_page = min(data.get('last_page', 1), 5) # সর্বোচ্চ ৫টি পেজে ফিক্সড রাখা হলো
+    last_page = min(data.get('last_page', 1), 5) # Page limit 5
 
     if not leads:
         return "🎯 No Live Leads Found!", None
@@ -45,16 +45,25 @@ def build_lead_message(data):
 
     markup = types.InlineKeyboardMarkup()
 
-    # 🔄 Refresh Button (Always on top)
+    # 1. Row 1: Refresh Button (Full width)
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
 
-    # ➡️ Next Button
-    if current_page < last_page:
-        markup.add(types.InlineKeyboardButton("➡️ Next", callback_data=f"page_{current_page + 1}"))
-
-    # 🔙 Back Button
+    # 2. Row 2: Prev & Next Buttons (Side by side)
+    nav_buttons = []
     if current_page > 1:
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"page_{current_page - 1}"))
+        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{current_page - 1}"))
+    else:
+        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data="noop"))
+
+    if current_page < last_page:
+        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"page_{current_page + 1}"))
+    else:
+        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data="noop"))
+
+    markup.row(*nav_buttons)
+
+    # 3. Row 3: Back Button (Welcome screen-e niye jabe)
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
 
     return message_text, markup
 
@@ -75,6 +84,30 @@ def send_leads(message):
         bot.send_message(message.chat.id, msg_text, reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "❌ Could not fetch live leads. Please try again later.")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'noop')
+def handle_noop(call):
+    bot.answer_callback_query(call.id, text="ℹ️ No more pages!")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
+def handle_back_to_welcome(call):
+    markup = types.InlineKeyboardMarkup()
+    btn = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
+    markup.add(btn)
+    
+    welcome_text = "👋 **Welcome to Live Leads Bot!**\n\nClick the button below to view live leads."
+    
+    try:
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=welcome_text,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
 def handle_pagination(call):
