@@ -24,22 +24,23 @@ def build_lead_message(data):
     last_page = data.get('last_page', 1)
 
     if not leads:
-        return "🎯 **No Live Leads Found!**", None
+        return "🎯 No Live Leads Found!", None
 
-    message_text = f"🎯 **Live Leads List (Page {current_page}/{last_page})**\n\n"
+    message_text = f"🎯 Live Leads List (Page {current_page}/{last_page})\n\n"
     
     for lead in leads:
-        user_id = lead.get('user_id', 'N/A')
-        offer_name = lead.get('offer_name', 'N/A')
-        provider = lead.get('provider', 'N/A')
-        points = lead.get('points', '0')
-        time_ago = lead.get('time_ago', 'Just now')
+        # ডাটাবেজের টেক্সট থেকে স্টার (*) রিমুভ করা হচ্ছে যাতে ফরম্যাটিং না ভাঙে
+        user_id = str(lead.get('user_id', 'N/A')).replace('*', '')
+        offer_name = str(lead.get('offer_name', 'N/A')).replace('*', '')
+        provider = str(lead.get('provider', 'N/A')).replace('*', '')
+        points = str(lead.get('points', '0')).replace('*', '')
+        time_ago = str(lead.get('time_ago', 'Just now')).replace('*', '')
 
-        message_text += f"👤 **User ID:** {user_id}\n"
-        message_text += f"📌 **Offer:** {offer_name}\n"
-        message_text += f"🌐 **Provider:** {provider}\n"
-        message_text += f"💰 **Reward:** {points} Points\n"
-        message_text += f"⏱️ **Time:** {time_ago}\n"
+        message_text += f"👤 User ID: {user_id}\n"
+        message_text += f"📌 Offer: {offer_name}\n"
+        message_text += f"🌐 Provider: {provider}\n"
+        message_text += f"💰 Reward: {points} Points\n"
+        message_text += f"⏱️ Time: {time_ago}\n"
         message_text += f"-----------------------------------\n"
 
     markup = types.InlineKeyboardMarkup()
