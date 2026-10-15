@@ -7,11 +7,12 @@ from telebot import TeleBot, types
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAFTySiiJuCRAE8d5FReU42XRXRNf3UVvRI')
 API_URL = 'https://genzreward.com/api/live-leads-bot'
+USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 
 bot = TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# সক্রিয় চ্যাট মেসেজ ট্র্যাক করার জন্য (Auto-Refresh এর জন্য)
+# অটো-রিফ্রেশ ট্র্যাক করার জন্য
 active_messages = {}
 
 def fetch_leads(page=1):
@@ -20,13 +21,41 @@ def fetch_leads(page=1):
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"Error fetching data: {e}")
+        print(f"Error fetching leads: {e}")
     return None
+
+def fetch_user_stats(telegram_id):
+    try:
+        response = requests.get(f"{USER_API_URL}?telegram_id={telegram_id}", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"Error fetching user stats: {e}")
+    return None
+
+def build_welcome_dashboard(user_first_name, telegram_id):
+    stats = fetch_user_stats(telegram_id)
+    daily_earnings = 0.0
+    
+    if stats and stats.get('registered'):
+        daily_earnings = stats.get('daily_earnings', 0.0)
+
+    welcome_text = (
+        f"👋 **Welcome {user_first_name}!**\n\n"
+        f"`Daily Earnings: {daily_earnings} TK`\n\n"
+        f"Click the button below to view live leads."
+    )
+
+    markup = types.InlineKeyboardMarkup()
+    btn = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
+    markup.add(btn)
+    
+    return welcome_text, markup
 
 def build_lead_message(data):
     leads = data.get('data', [])
     current_page = data.get('current_page', 1)
-    last_page = min(data.get('last_page', 1), 5) # Page limit 5
+    last_page = min(data.get('last_page', 1), 5)
 
     if not leads:
         return "🎯 No Live Leads Found!", None
@@ -47,11 +76,8 @@ def build_lead_message(data):
         message_text += f"⏱️ Time: {time_ago}\n\n"
 
     markup = types.InlineKeyboardMarkup()
-
-    # 1. Row 1: Refresh Button (Full width)
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
 
-    # 2. Row 2: Dynamic Prev & Next Buttons
     nav_buttons = []
     if current_page > 1:
         nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{current_page - 1}"))
@@ -61,15 +87,12 @@ def build_lead_message(data):
     if nav_buttons:
         markup.row(*nav_buttons)
 
-    # 3. Row 3: Back Button
     markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
-
     return message_text, markup
 
-# 🔄 ১৫ সেকেন্ড পর পর অটো-রিফ্রেশ করার ব্যাকগ্রাউন্ড লুপ
 def auto_refresh_loop():
     while True:
-        time.sleep(15) # প্রতি ১৫ সেকেন্ড পর পর চলবে
+        time.sleep(15)
         for chat_id, info in list(active_messages.items()):
             msg_id = info.get('message_id')
             current_page = info.get('page', 1)
@@ -84,31 +107,21 @@ def auto_refresh_loop():
                         text=msg_text,
                         reply_markup=markup
                     )
-                except Exception as e:
-                    # মেসেজ মডিফাই না হলে বা মুছে ফেললে স্কিপ করবে
+                except Exception:
                     pass
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    # স্টার্ট চাপলে পুরানো রিফ্রেশ ট্র্যাকিং মুছে যাবে
     active_messages.pop(message.chat.id, None)
-    
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
-    markup.add(btn)
-    
-    welcome_text = "👋 **Welcome to Live Leads Bot!**\n\nClick the button below to view live leads."
+    user_name = message.from_user.first_name or "User"
+    welcome_text, markup = build_welcome_dashboard(user_name, message.from_user.id)
     bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
     active_messages.pop(call.message.chat.id, None)
-    
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
-    markup.add(btn)
-    
-    welcome_text = "👋 **Welcome to Live Leads Bot!**\n\nClick the button below to view live leads."
+    user_name = call.from_user.first_name or "User"
+    welcome_text, markup = build_welcome_dashboard(user_name, call.from_user.id)
     
     try:
         bot.edit_message_text(
@@ -136,12 +149,11 @@ def handle_pagination(call):
                 text=msg_text,
                 reply_markup=markup
             )
-            # অটো-রিফ্রেশের জন্য মেসেজ আইডি ও পেজ সেভ রাখা হচ্ছে
             active_messages[call.message.chat.id] = {
                 'message_id': call.message.message_id,
                 'page': page
             }
-            bot.answer_callback_query(call.id) # কোনো পপআপ টেক্সট নেই
+            bot.answer_callback_query(call.id)
         except Exception:
             bot.answer_callback_query(call.id)
     else:
@@ -152,9 +164,7 @@ def home():
     return "Telegram Bot Server is Running!"
 
 if __name__ == '__main__':
-    # অটো-রিফ্রেশ থ্রেড শুরু করা হচ্ছে
     threading.Thread(target=auto_refresh_loop, daemon=True).start()
-    
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
     bot.infinity_polling()
