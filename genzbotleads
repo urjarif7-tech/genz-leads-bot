@@ -59,8 +59,8 @@ def build_lead_message(data):
 # /start দিলে ওয়েলকাম মেসেজ ও বাটন দেখাবে
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    markup = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
-    btn = types.KeyboardButton("🎯 Live Leads")
+    markup = types.InlineKeyboardMarkup()
+    btn = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
     markup.add(btn)
     
     welcome_text = "👋 **Welcome to Live Leads Bot!**\n\nClick the button below to view live leads."
