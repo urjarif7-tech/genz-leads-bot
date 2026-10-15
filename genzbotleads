@@ -31,7 +31,6 @@ def fetch_api_leads():
         response = requests.get(API_URL, timeout=10)
         if response.status_code == 200:
             json_data = response.json()
-            # API Response Format Handle (array or object inside data/leads)
             if isinstance(json_data, list):
                 return json_data
             elif isinstance(json_data, dict):
@@ -112,7 +111,6 @@ def handle_pagination(call):
     
     bot.answer_callback_query(call.id, f"Loaded Page {page}")
     
-    # Try updating message text, if it fails then send new message
     try:
         bot.edit_message_text(
             text, 
@@ -150,17 +148,26 @@ def fetch_and_send_leads():
                     f"💰 **Reward:** {points} Points\n"
                 )
                 
-                bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                seen_lead_ids.add(lead_id)
+                try:
+                    bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+                    seen_lead_ids.add(lead_id)
+                except Exception as e:
+                    print(f"Failed to send lead message: {e}")
 
 def auto_loop():
     while True:
         fetch_and_send_leads()
         time.sleep(15)
 
+# Safe Polling Function (Network/Connection drop হলে রিস্টার্ট করবে)
 def run_bot():
     print("Bot polling started...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        except Exception as e:
+            print(f"Connection error occurred: {e}. Retrying in 5 seconds...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     t1 = Thread(target=auto_loop)
