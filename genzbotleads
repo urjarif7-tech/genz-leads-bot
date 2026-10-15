@@ -30,7 +30,6 @@ def build_lead_message(data):
     message_text = f"🎯 Live Leads List (Page {current_page}/{last_page})\n\n"
     
     for lead in leads:
-        # ডাটাবেজের টেক্সট থেকে স্টার (*) রিমুভ করা হচ্ছে যাতে ফরম্যাটিং না ভাঙে
         user_id = str(lead.get('user_id', 'N/A')).replace('*', '')
         offer_name = str(lead.get('offer_name', 'N/A')).replace('*', '')
         provider = str(lead.get('provider', 'N/A')).replace('*', '')
@@ -44,18 +43,20 @@ def build_lead_message(data):
         message_text += f"⏱️ Time: {time_ago}\n"
         message_text += f"-----------------------------------\n"
 
+    # Nex-Labs style full-width vertical layout
     markup = types.InlineKeyboardMarkup()
-    buttons = []
 
-    if current_page > 1:
-        buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{current_page - 1}"))
-    
-    buttons.append(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
+    # 🔄 Refresh Button (Always on top)
+    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
 
+    # ➡️ Next Button
     if current_page < last_page:
-        buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"page_{current_page + 1}"))
+        markup.add(types.InlineKeyboardButton("➡️ Next", callback_data=f"page_{current_page + 1}"))
 
-    markup.row(*buttons)
+    # 🔙 Back Button
+    if current_page > 1:
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"page_{current_page - 1}"))
+
     return message_text, markup
 
 @bot.message_handler(commands=['start'])
