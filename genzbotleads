@@ -168,3 +168,49 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
     bot.infinity_polling()
+# --- ADMIN BAN & UNBAN SYSTEM ---
+@bot.message_handler(commands=['banned'])
+def handle_banned_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    admin_states[ADMIN_ID] = 'waiting_for_ban_username'
+    bot.reply_to(message, "⚠️ Je user-ke ban korte chan tar Telegram ID likhun:")
+
+@bot.message_handler(func=lambda msg: msg.from_user.id == ADMIN_ID and admin_states.get(ADMIN_ID) == 'waiting_for_ban_username')
+def process_ban_username(message):
+    target_input = message.text.strip()
+    admin_states.pop(ADMIN_ID, None)
+    
+    if target_input.isdigit():
+        target_id = int(target_input)
+        if target_id not in BANNED_USERS:
+            BANNED_USERS.append(target_id)
+            bot.reply_to(message, f"✅ Success! Telegram ID `{target_id}` has been banned from the bot.", parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"⚠️ Telegram ID `{target_id}` is already in the banned list.", parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ Invalid ID! Anugroh kore shothik Telegram ID (jemon: 123456789) din.")
+
+@bot.message_handler(commands=['unbanned'])
+def handle_unbanned_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    admin_states[ADMIN_ID] = 'waiting_for_unban_username'
+    bot.reply_to(message, "🔓 Je user-ke unban korte chan tar Telegram ID likhun:")
+
+@bot.message_handler(func=lambda msg: msg.from_user.id == ADMIN_ID and admin_states.get(ADMIN_ID) == 'waiting_for_unban_username')
+def process_unban_username(message):
+    target_input = message.text.strip()
+    admin_states.pop(ADMIN_ID, None)
+    
+    if target_input.isdigit():
+        target_id = int(target_input)
+        if target_id in BANNED_USERS:
+            BANNED_USERS.remove(target_id)
+            bot.reply_to(message, f"🎉 Success! Telegram ID `{target_id}` has been unbanned.", parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"⚠️ Telegram ID `{target_id}` is not in the banned list.", parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ Invalid ID! Anugroh kore shothik Telegram ID (jemon: 123456789) din.")
