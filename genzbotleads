@@ -563,4 +563,50 @@ def handle_admin_due_cmd(message):
 @bot.message_handler(commands=['paid'])
 def handle_admin_paid_cmd(message):
     if message.from_user.id != ADMIN_ID:
-        bot.reply_to
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        target_date = args[2]
+        pay_amount = float(args[3])
+
+        u_data = get_user_db(target_user)
+        logs = u_data['due_logs']
+        if not logs:
+            bot.reply_to(message, "❌ No due logs found for this user!")
+            return
+
+        start_idx = -1
+        for idx, entry in enumerate(logs):
+            if entry.get('date') == target_date:
+                start_idx = idx
+                break
+
+        if start_idx == -1:
+            bot.reply_to(message, f"❌ No entry found for date `{target_date}`!", parse_mode='Markdown')
+            return
+
+        remaining_pay = pay_amount
+        for i in range(start_idx, len(logs)):
+            if remaining_pay <= 0:
+                break
+            
+            entry = logs[i]
+            needed = float(entry.get('price', 0.0)) - float(entry.get('paid', 0.0))
+
+            if needed > 0:
+                if remaining_pay >= needed:
+                    entry['paid'] = float(entry.get('paid', 0.0)) + needed
+                    remaining_pay -= needed
+                else:
+                    entry['paid'] = float(entry.get('paid', 0.0)) + remaining_pay
+                    remaining_pay = 0
+
+        u_data['paid'] += pay_amount
+        save_user_db(target_user, u_data)
+
+        try:
+            bot.send_message(
+                target_user, 
+                f"✅ **Good News!** Payment of `{pay_
