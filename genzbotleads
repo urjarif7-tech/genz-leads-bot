@@ -218,7 +218,7 @@ def handle_buy_711_confirm(call):
     USER_SPEND[uid] = USER_SPEND.get(uid, 0.0) + cost
     USER_DUES[uid] = USER_DUES.get(uid, 0.0) + cost
 
-    ip_port_user_pass = "global.rotip.trustsource.live:20000:USER702036-zone-custom-region-US-st-Arizona-session-30491055:60b3d6"
+    ip_port_user_pass = "proxy.711proxy.com:8080:USER702036:60b3d6"
     try:
         res = requests.get(PROXY_711_URL, timeout=10)
         if res.status_code == 200:
