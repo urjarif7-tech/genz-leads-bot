@@ -102,7 +102,7 @@ def save_user_db(telegram_id, data):
     conn.commit()
     conn.close()
 
-# US States List for 711 Proxy
+# US States List for Cliproxy
 US_STATES = [
     "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
     "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", 
@@ -331,29 +331,29 @@ def handle_buy_proxy(call):
     text = "🌐 **BUY PROXY**\n\nChoose a provider:"
     markup = types.InlineKeyboardMarkup(row_width=1)
     
-    btn_711proxy = types.InlineKeyboardButton("🌐 711 Proxy (State)", callback_data="prov_711proxy")
+    btn_cliproxy = types.InlineKeyboardButton("🌐 Cliproxy (States)", callback_data="prov_cliproxy")
     btn_back = types.InlineKeyboardButton("⬅️ Back", callback_data="go_welcome")
 
-    markup.add(btn_711proxy, btn_back)
+    markup.add(btn_cliproxy, btn_back)
     try:
         bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
     except Exception:
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
-def handle_711proxy_states(call):
+@bot.callback_query_handler(func=lambda call: call.data == 'prov_cliproxy')
+def handle_cliproxy_states(call):
     balance = get_effective_balance(call.from_user.id)
 
     text = (
-        f"🌐 **711 PROXY (STATE)**\n\n"
+        f"🌐 **CLIPROXY (STATES)**\n\n"
         f"💳 Balance: {balance} TK\n"
         f"💰 Per successful request: 5.0 TK\n\n"
         f"You're only charged if the proxy actually works — select a state:"
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
-    buttons = [types.InlineKeyboardButton(s, callback_data=f"state711_{s.lower()}") for s in US_STATES]
+    buttons = [types.InlineKeyboardButton(s, callback_data=f"stateclip_{s.lower()}") for s in US_STATES]
     markup.add(*buttons)
     markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu_buy_proxy"))
 
@@ -367,7 +367,7 @@ def handle_711proxy_states(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('state711_'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stateclip_'))
 def handle_state_quantity(call):
     state_code = call.data.split('_')[1]
     state_name = state_code.capitalize()
@@ -382,9 +382,9 @@ def handle_state_quantity(call):
     )
 
     markup = types.InlineKeyboardMarkup(row_width=3)
-    qty_buttons = [types.InlineKeyboardButton(f"{i}x", callback_data=f"buy_711_{state_code}_{i}") for i in range(1, 7)]
+    qty_buttons = [types.InlineKeyboardButton(f"{i}x", callback_data=f"buy_clip_{state_code}_{i}") for i in range(1, 7)]
     markup.add(*qty_buttons)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="prov_711proxy"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="prov_cliproxy"))
 
     try:
         bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
@@ -392,8 +392,8 @@ def handle_state_quantity(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('buy_711_'))
-def handle_buy_711_confirm(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith('buy_clip_'))
+def handle_buy_clip_confirm(call):
     parts = call.data.split('_')
     state_code = parts[2].lower()
     state_name = parts[2].capitalize()
@@ -423,7 +423,7 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # Direct backend generation (No API whitelisting/timeout issues)
+    # Cliproxy format generation
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
@@ -449,7 +449,7 @@ def handle_buy_711_confirm(call):
     caption = (
         f"✅ **PROXY VERIFIED & CHARGED ({quantity}/{quantity})**\n\n"
         f"💳 Charged: {cost} TK\n"
-        f"🌐 711 Proxy ({state_name}, United States)\n"
+        f"🌐 Cliproxy (States) ({state_name}, United States)\n"
         f"📍 Proxy:\n`{proxy_display_text}`"
     )
 
@@ -468,7 +468,7 @@ def handle_buy_711_confirm(call):
     )
 
     markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_states = types.InlineKeyboardButton("🦊 States", callback_data="prov_711proxy")
+    btn_states = types.InlineKeyboardButton("🦊 States", callback_data="prov_cliproxy")
     btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
     markup.add(btn_states, btn_back)
 
@@ -745,7 +745,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
