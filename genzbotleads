@@ -3,6 +3,8 @@ import time
 import io
 import threading
 import sqlite3
+import json
+import random
 import requests
 import qrcode
 from datetime import datetime, timezone, timedelta
@@ -15,7 +17,6 @@ API_URL = 'https://genzreward.com/api/live-leads-bot'
 USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 
 # --- Configuration ---
-PROXY_711_URL = "http://gen.trustsource.live/gen?zone=custom&ptype=2&region=US&count=1&proto=socks5&stype=text&split=\r\n"
 ADMIN_ID = 7089010379
 
 bot = TeleBot(BOT_TOKEN)
@@ -396,25 +397,17 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    ip_port_user_pass = "proxy.711proxy.com:8080:USER702036:60b3d6"
-    try:
-        res = requests.get(PROXY_711_URL, timeout=10)
-        if res.status_code == 200:
-            text_data = res.text.strip()
-            if text_data:
-                ip_port_user_pass = text_data.split('\n')[0].strip()
-    except Exception as e:
-        print(f"711 Proxy API Error: {e}")
+    # সাব-ইউজার ও সেশন আইডি দিয়ে ডায়নামিক ও ফ্রেশ প্রক্সি জেনারেট করার লজিক (আইপি হোয়াইটলিস্ট ছাড়াই কাজ করবে)
+    proxy_urls_list = []
+    for _ in range(quantity):
+        session_id = random.randint(10000000, 99999999)
+        formatted_proxy = f"socks5://USER702036-zone-custom-region-{state_code}-session-{session_id}:60b3d6@global.rotip.trustsource.live:20000"
+        proxy_urls_list.append(formatted_proxy)
 
-    p_parts = ip_port_user_pass.split(':')
-    if len(p_parts) >= 4:
-        host, port, username, password = p_parts[0], p_parts[1], p_parts[2], p_parts[3]
-        proxy_url = f"socks5://{username}:{password}@{host}:{port}"
-    else:
-        proxy_url = f"socks5://{ip_port_user_pass}"
+    proxy_display_text = "\n".join(proxy_urls_list)
 
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(proxy_url)
+    qr.add_data(proxy_display_text)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
 
@@ -426,7 +419,7 @@ def handle_buy_711_confirm(call):
         f"✅ **PROXY VERIFIED & ADDED TO DUE ({quantity}/{quantity})**\n\n"
         f"🔴 Status: Due ({cost} TK)\n"
         f"🌐 711 Proxy ({state_name}, United States)\n"
-        f"📍 Proxy: `{proxy_url}`"
+        f"📍 Proxy:\n`{proxy_display_text}`"
     )
 
     bot.delete_message(call.message.chat.id, call.message.message_id)
