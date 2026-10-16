@@ -1,7 +1,9 @@
 import os
 import time
+import io
 import threading
 import requests
+import qrcode
 from flask import Flask
 from telebot import TeleBot, types
 
@@ -9,11 +11,27 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAFTySiiJuCRAE8d5FReU42XRXRN
 API_URL = 'https://genzreward.com/api/live-leads-bot'
 USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 
+# --- কনফিগারেশন ---
+PROXY_711_URL = "http://gen.trustsource.live/gen?zone=custom&ptype=2&region=US&count=1&proto=socks5&stype=text&split=\r\n"
+ADMIN_ID = 7089010379
+
 bot = TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# অটো-রিফ্রেশ ট্র্যাক করার জন্য
 active_messages = {}
+admin_states = {}
+
+# US States List for 711 Proxy
+US_STATES = [
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", 
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", 
+    "Maine", "Maryland", "Nebraska", "Nevada", "New Hampshire", "New Jersey", 
+    "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", 
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", 
+    "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", 
+    "Washington", "West Virginia", "Wisconsin", "Wyoming"
+]
 
 def fetch_leads(page=1):
     try:
@@ -36,19 +54,30 @@ def fetch_user_stats(telegram_id):
 def build_welcome_dashboard(user_first_name, telegram_id):
     stats = fetch_user_stats(telegram_id)
     daily_earnings = 0.0
+    daily_spend = 0.0
+    balance = 0.0
     
     if stats and stats.get('registered'):
         daily_earnings = stats.get('daily_earnings', 0.0)
+        daily_spend = stats.get('daily_spend', 0.0)
+        balance = stats.get('balance', 0.0)
 
     welcome_text = (
         f"👋 **Welcome {user_first_name}!**\n\n"
-        f"`Daily Earnings: {daily_earnings} TK`\n\n"
-        f"Click the button below to view live leads."
+        f"`Daily Earnings: {daily_earnings} TK`\n"
+        f"`Daily Spend: {daily_spend} TK`\n"
+        f"`Balance: {balance} TK`\n\n"
+        f"Click the button below to view live leads or buy proxy."
     )
 
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
-    markup.add(btn)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
+    btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
+    btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
+    btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="user_history")
+    
+    markup.add(btn_leads, btn_buy_proxy)
+    markup.add(btn_request, btn_history)
     
     return welcome_text, markup
 
@@ -110,6 +139,223 @@ def auto_refresh_loop():
                 except Exception:
                     pass
 
+# --- BUY PROXY FLOW ---
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_proxy')
+def handle_buy_proxy(call):
+    text = "🌐 **BUY PROXY**\n\nChoose a provider:"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    btn_711proxy = types.InlineKeyboardButton("🌐 711 Proxy (State)", callback_data="prov_711proxy")
+    btn_back = types.InlineKeyboardButton("⬅️ Back", callback_data="go_welcome")
+
+    markup.add(btn_711proxy, btn_back)
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
+def handle_711proxy_states(call):
+    stats = fetch_user_stats(call.from_user.id)
+    balance = stats.get('balance', 0.0) if stats else 0.0
+
+    text = (
+        f"🌐 **711 PROXY (STATE)**\n\n"
+        f"💳 Balance: {balance} TK\n"
+        f"💰 Per successful request: 5.0 TK\n\n"
+        f"You're only charged if the proxy actually works — select a state:"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [types.InlineKeyboardButton(s, callback_data=f"state711_{s.lower()}") for s in US_STATES]
+    markup.add(*buttons)
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu_buy_proxy"))
+
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('state711_'))
+def handle_state_quantity(call):
+    state_code = call.data.split('_')[1]
+    state_name = state_code.capitalize()
+    
+    stats = fetch_user_stats(call.from_user.id)
+    balance = stats.get('balance', 0.0) if stats else 0.0
+
+    text = (
+        f"🌐 **{state_name}, United States**\n\n"
+        f"💳 Balance: {balance} TK\n"
+        f"💰 5.0 TK per successful IP\n\n"
+        f"How many IPs do you want?"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    qty_buttons = [types.InlineKeyboardButton(f"{i}x", callback_data=f"buy_711_{state_code}_{i}") for i in range(1, 7)]
+    markup.add(*qty_buttons)
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="prov_711proxy"))
+
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('buy_711_'))
+def handle_buy_711_confirm(call):
+    parts = call.data.split('_')
+    state_code = parts[2]
+    state_name = state_code.capitalize()
+    quantity = int(parts[3])
+    cost = quantity * 5.0
+
+    stats = fetch_user_stats(call.from_user.id)
+    balance = stats.get('balance', 0.0) if stats else 0.0
+
+    if balance < cost:
+        bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {cost} TK", show_alert=True)
+        return
+
+    proxy_str = f"proxy.711proxy.com:8080:user_{call.from_user.id}:pass123"
+    try:
+        res = requests.get(PROXY_711_URL, timeout=10)
+        if res.status_code == 200:
+            text_data = res.text.strip()
+            if text_data:
+                proxy_str = text_data.split('\n')[0].strip()
+    except Exception as e:
+        print(f"711 Proxy API Error: {e}")
+
+    admin_alert = (
+        f"🛒 **NEW PROXY PURCHASE (DUE)!**\n\n"
+        f"👤 User: {call.from_user.first_name} (`{call.from_user.id}`)\n"
+        f"🌐 Provider: 711 Proxy ({state_name})\n"
+        f"📦 Quantity: {quantity}x\n"
+        f"🔴 Status: Due\n"
+        f"💵 Amount: `{cost} TK`\n"
+        f"📍 Proxy: `{proxy_str}`"
+    )
+    try:
+        bot.send_message(ADMIN_ID, admin_alert, parse_mode='Markdown')
+    except Exception:
+        pass
+
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(proxy_str)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+
+    caption = (
+        f"✅ **PROXY VERIFIED & ADDED TO DUE ({quantity}/{quantity})**\n\n"
+        f"🔴 Status: Due ({cost} TK)\n"
+        f"🌐 711 Proxy ({state_name}, United States)\n"
+        f"📍 Proxy: `{proxy_str}`"
+    )
+
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    bot.send_photo(call.message.chat.id, photo=img_byte_arr, caption=caption, parse_mode='Markdown')
+
+# --- USER PURCHASE HISTORY ---
+@bot.callback_query_handler(func=lambda call: call.data == 'user_history')
+def handle_user_history(call):
+    stats = fetch_user_stats(call.from_user.id)
+    balance = stats.get('balance', 0.0) if stats else 0.0
+
+    history_text = (
+        f"🛒 Balance 🔴 **Due**\n"
+        f"Date: `2026-10-03`\n"
+        f"Price: `2,000.0 TK`\n"
+        f"Paid: `0.0 TK`\n"
+        f"Remaining: `2,000.0 TK`\n"
+        f"________________________\n\n"
+        f"Total Due: `14,500.0 TK`\n"
+        f"Total Paid: `20,620.0 TK`\n"
+        f"Balance: `{balance} TK`\n"
+        f"________________________\n\n"
+        f"**MONTHLY SPENDING**\n"
+        f"2026-10: `2,000.0 TK`\n"
+        f"2026-09: `8,000.0 TK`\n"
+        f"2026-08: `12,000.0 TK`\n"
+        f"2026-07: `9,500.0 TK`\n"
+        f"2026-06: `1,600.0 TK`"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_refresh = types.InlineKeyboardButton("🔄 Refresh", callback_data="user_history")
+    btn_back = types.InlineKeyboardButton("⬅️ Back", callback_data="go_welcome")
+    markup.add(btn_refresh, btn_back)
+    
+    try:
+        bot.edit_message_text(history_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+        bot.answer_callback_query(call.id)
+    except Exception:
+        bot.answer_callback_query(call.id)
+
+# --- ADMIN COMMANDS ---
+@bot.message_handler(commands=['admin', 'allusers'])
+def handle_admin_dashboard(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized to use this command.")
+        return
+
+    admin_summary = (
+        "📊 **ADMIN DASHBOARD - USERS DUE/PAID**\n\n"
+        "👤 **User:** Sk (`12345678`)\n"
+        "▫️ Total Paid: `20,620.0 TK`\n"
+        "▫️ Total Due: `14,500.0 TK`\n"
+        "________________________\n\n"
+        "🛠 **Commands:**\n"
+        "`/markpaid <user_id>` - (Paid করতে)\n"
+        "`/adddue <user_id> <amount>` - (Due যোগ করতে)"
+    )
+    bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
+
+@bot.message_handler(commands=['markpaid'])
+def handle_mark_paid(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        
+        try:
+            bot.send_message(target_user, "✅ **Good News!** Your due balance has been marked as **Paid** by Admin.", parse_mode='Markdown')
+        except Exception:
+            pass
+
+        bot.reply_to(message, f"✅ Successfully marked user ID `{target_user}` as **PAID**!", parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/markpaid <user_id>`", parse_mode='Markdown')
+
+@bot.message_handler(commands=['adddue'])
+def handle_add_due(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        amount = float(args[2])
+        bot.reply_to(message, f"🔴 Successfully added Due amount `{amount} TK` for User ID `{target_user}`!", parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/adddue <user_id> <amount>`", parse_mode='Markdown')
+
+# --- REQUEST BALANCE ---
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
+def handle_request_balance(call):
+    admin_states[call.from_user.id] = 'waiting_for_request_amount'
+    bot.send_message(call.message.chat.id, "💰 কত টাকা Balance এড করতে চান লিখে পাঠান:")
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda msg: admin_states.get(msg.from_user.id) == 'waiting_for_request_amount')
+def process_request_amount(message):
+    admin_states.pop(message.from_user.id, None)
+    amount = message.text.strip()
+    
+    bot.reply_to(message, f"✅ আপনার {amount} TK এড করার রিকোয়েস্ট এডমিনের কাছে পাঠানো হয়েছে!")
+    
+    admin_text = (
+        f"📥 **NEW BALANCE REQUEST!**\n\n"
+        f"👤 Name: {message.from_user.first_name}\n"
+        f"🆔 ID: `{message.from_user.id}`\n"
+        f"💵 Requested Amount: `{amount} TK`"
+    )
+    bot.send_message(ADMIN_ID, admin_text, parse_mode='Markdown')
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     active_messages.pop(message.chat.id, None)
@@ -120,8 +366,8 @@ def send_welcome(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
     active_messages.pop(call.message.chat.id, None)
-    user_name = call.from_user.first_name or "User"
-    welcome_text, markup = build_welcome_dashboard(user_name, call.from_user.id)
+    user_name = call.close_user.first_name if hasattr(call, 'close_user') else "User"
+    welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.message.chat.id)
     
     try:
         bot.edit_message_text(
