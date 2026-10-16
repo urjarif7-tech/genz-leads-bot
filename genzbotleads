@@ -2,11 +2,9 @@ import os
 import time
 import io
 import threading
-import json
+import sqlite3
 import requests
 import qrcode
-import firebase_admin
-from firebase_admin import credentials, firestore
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -26,33 +24,43 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
-# --- Firebase Initialization ---
-firebase_key_json = os.environ.get('FIREBASE_KEY_JSON')
+# --- SQLite Database Initialization ---
+DB_FILE = "bot_database.db"
 
-if firebase_key_json:
-    cred_dict = json.loads(firebase_key_json)
-    cred = credentials.Certificate(cred_dict)
-elif os.path.exists('firebase_key.json'):
-    cred = credentials.Certificate('firebase_key.json')
-else:
-    raise RuntimeError("Firebase Key missing! Provide firebase_key.json or FIREBASE_KEY_JSON environment variable.")
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id TEXT PRIMARY KEY,
+            balance REAL DEFAULT 0.0,
+            spend REAL DEFAULT 0.0,
+            due REAL DEFAULT 0.0,
+            paid REAL DEFAULT 0.0,
+            purchases TEXT DEFAULT '[]',
+            due_logs TEXT DEFAULT '[]'
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+init_db()
 
 def get_user_db(telegram_id):
-    doc_ref = db.collection('users').document(str(telegram_id))
-    doc = doc_ref.get()
-    
-    if doc.exists:
-        data = doc.to_dict()
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (str(telegram_id),))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
         return {
-            'balance': float(data.get('balance', 0.0)),
-            'spend': float(data.get('spend', 0.0)),
-            'due': float(data.get('due', 0.0)),
-            'paid': float(data.get('paid', 0.0)),
-            'purchases': data.get('purchases', []),
-            'due_logs': data.get('due_logs', [])
+            'balance': float(row[0]),
+            'spend': float(row[1]),
+            'due': float(row[2]),
+            'paid': float(row[3]),
+            'purchases': json.loads(row[4]),
+            'due_logs': json.loads(row[5])
         }
     else:
         return {
@@ -65,8 +73,22 @@ def get_user_db(telegram_id):
         }
 
 def save_user_db(telegram_id, data):
-    doc_ref = db.collection('users').document(str(telegram_id))
-    doc_ref.set(data, merge=True)
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        str(telegram_id),
+        data['balance'],
+        data['spend'],
+        data['due'],
+        data['paid'],
+        json.dumps(data['purchases']),
+        json.dumps(data['due_logs'])
+    ))
+    conn.commit()
+    conn.close()
 
 # US States List for 711 Proxy
 US_STATES = [
