@@ -214,9 +214,7 @@ def handle_buy_711_confirm(call):
         return
 
     uid = int(call.from_user.id)
-    # Deduct from balance
     USER_BALANCES[uid] = USER_BALANCES.get(uid, 0.0) - cost
-    # Add to spend & due
     USER_SPEND[uid] = USER_SPEND.get(uid, 0.0) + cost
     USER_DUES[uid] = USER_DUES.get(uid, 0.0) + cost
 
@@ -230,7 +228,6 @@ def handle_buy_711_confirm(call):
     except Exception as e:
         print(f"711 Proxy API Error: {e}")
 
-    # Format proxy for Shadowrocket (SOCKS5 scheme)
     p_parts = ip_port_user_pass.split(':')
     if len(p_parts) >= 4:
         host, port, username, password = p_parts[0], p_parts[1], p_parts[2], p_parts[3]
