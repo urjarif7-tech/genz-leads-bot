@@ -4,7 +4,7 @@ import io
 import threading
 import requests
 import qrcode
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import Flask
 from telebot import TeleBot, types
 
@@ -267,11 +267,11 @@ def handle_buy_711_confirm(call):
     USER_SPEND[uid] = USER_SPEND.get(uid, 0.0) + cost
     USER_DUES[uid] = USER_DUES.get(uid, 0.0) + cost
 
-    # Record Purchase History Log
-    now = datetime.now()
+    # Record Purchase History Log with Bangladesh Time (UTC+6)
+    bd_time = datetime.now(timezone(timedelta(hours=6)))
     purchase_log = {
-        'date': now.strftime("%d/%m/%Y"),
-        'time': now.strftime("%I:%M %p").lower(),
+        'date': bd_time.strftime("%d/%m/%Y"),
+        'time': bd_time.strftime("%I:%M %p").lower(),
         'state': state_name,
         'quantity': quantity,
         'cost': cost
@@ -473,55 +473,4 @@ def send_welcome(message):
     active_messages.pop(message.chat.id, None)
     user_name = message.from_user.first_name or "User"
     welcome_text, markup = build_welcome_dashboard(user_name, message.from_user.id)
-    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
-def handle_back_to_welcome(call):
-    active_messages.pop(call.message.chat.id, None)
-    welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.message.chat.id)
-    
-    try:
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=welcome_text,
-            parse_mode='Markdown',
-            reply_markup=markup
-        )
-        bot.answer_callback_query(call.id)
-    except Exception:
-        bot.answer_callback_query(call.id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
-def handle_pagination(call):
-    page = int(call.data.split('_')[1])
-    data = fetch_leads(page=page)
-    
-    if data:
-        msg_text, markup = build_lead_message(data)
-        try:
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=msg_text,
-                reply_markup=markup
-            )
-            active_messages[call.message.chat.id] = {
-                'message_id': call.message.message_id,
-                'page': page
-            }
-            bot.answer_callback_query(call.id)
-        except Exception:
-            bot.answer_callback_query(call.id)
-    else:
-        bot.answer_callback_query(call.id)
-
-@app.route('/')
-def home():
-    return "Telegram Bot Server is Running!"
-
-if __name__ == '__main__':
-    threading.Thread(target=auto_refresh_loop, daemon=True).start()
-    port = int(os.environ.get('PORT', 5000))
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
-    bot.infinity_polling()
+    bot
