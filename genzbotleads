@@ -11,7 +11,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAFTySiiJuCRAE8d5FReU42XRXRN
 API_URL = 'https://genzreward.com/api/live-leads-bot'
 USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 
-# --- কনফিগারেশন ---
+# --- Configuration ---
 PROXY_711_URL = "http://gen.trustsource.live/gen?zone=custom&ptype=2&region=US&count=1&proto=socks5&stype=text&split=\r\n"
 ADMIN_ID = 7089010379
 
@@ -20,6 +20,11 @@ app = Flask(__name__)
 
 active_messages = {}
 admin_states = {}
+
+# Local Memory for Manual Balance & Transaction Updates
+USER_BALANCES = {}
+USER_DUES = {}
+USER_PAID = {}
 
 # US States List for 711 Proxy
 US_STATES = [
@@ -51,16 +56,22 @@ def fetch_user_stats(telegram_id):
         print(f"Error fetching user stats: {e}")
     return None
 
+def get_effective_balance(telegram_id):
+    stats = fetch_user_stats(telegram_id)
+    api_bal = stats.get('balance', 0.0) if (stats and stats.get('registered')) else 0.0
+    local_add = USER_BALANCES.get(int(telegram_id), 0.0)
+    return api_bal + local_add
+
 def build_welcome_dashboard(user_first_name, telegram_id):
     stats = fetch_user_stats(telegram_id)
     daily_earnings = 0.0
     daily_spend = 0.0
-    balance = 0.0
     
     if stats and stats.get('registered'):
         daily_earnings = stats.get('daily_earnings', 0.0)
         daily_spend = stats.get('daily_spend', 0.0)
-        balance = stats.get('balance', 0.0)
+
+    balance = get_effective_balance(telegram_id)
 
     welcome_text = (
         f"👋 **Welcome {user_first_name}!**\n\n"
@@ -153,8 +164,7 @@ def handle_buy_proxy(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
 def handle_711proxy_states(call):
-    stats = fetch_user_stats(call.from_user.id)
-    balance = stats.get('balance', 0.0) if stats else 0.0
+    balance = get_effective_balance(call.from_user.id)
 
     text = (
         f"🌐 **711 PROXY (STATE)**\n\n"
@@ -175,8 +185,7 @@ def handle_state_quantity(call):
     state_code = call.data.split('_')[1]
     state_name = state_code.capitalize()
     
-    stats = fetch_user_stats(call.from_user.id)
-    balance = stats.get('balance', 0.0) if stats else 0.0
+    balance = get_effective_balance(call.from_user.id)
 
     text = (
         f"🌐 **{state_name}, United States**\n\n"
@@ -200,12 +209,15 @@ def handle_buy_711_confirm(call):
     quantity = int(parts[3])
     cost = quantity * 5.0
 
-    stats = fetch_user_stats(call.from_user.id)
-    balance = stats.get('balance', 0.0) if stats else 0.0
+    balance = get_effective_balance(call.from_user.id)
 
     if balance < cost:
         bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {cost} TK", show_alert=True)
         return
+
+    # Deduct cost from local balance memory
+    uid = int(call.from_user.id)
+    USER_BALANCES[uid] = USER_BALANCES.get(uid, 0.0) - cost
 
     proxy_str = f"proxy.711proxy.com:8080:user_{call.from_user.id}:pass123"
     try:
@@ -255,16 +267,14 @@ def handle_buy_711_confirm(call):
 def handle_user_history(call):
     stats = fetch_user_stats(call.from_user.id)
     
-    total_due = 0.0
-    total_paid = 0.0
-    balance = 0.0
-    daily_spend = 0.0
-    
-    if stats and stats.get('registered'):
-        total_due = stats.get('total_due', 0.0)
-        total_paid = stats.get('total_paid', 0.0)
-        balance = stats.get('balance', 0.0)
-        daily_spend = stats.get('daily_spend', 0.0)
+    uid = int(call.from_user.id)
+    api_due = stats.get('total_due', 0.0) if (stats and stats.get('registered')) else 0.0
+    api_paid = stats.get('total_paid', 0.0) if (stats and stats.get('registered')) else 0.0
+    daily_spend = stats.get('daily_spend', 0.0) if (stats and stats.get('registered')) else 0.0
+
+    total_due = api_due + USER_DUES.get(uid, 0.0)
+    total_paid = api_paid + USER_PAID.get(uid, 0.0)
+    balance = get_effective_balance(call.from_user.id)
 
     history_text = (
         f"📜 **PURCHASE & TRANSACTION HISTORY**\n\n"
@@ -274,7 +284,7 @@ def handle_user_history(call):
         f"💳 **Current Balance:** `{balance} TK`\n"
         f"🛍️ **Today's Spend:** `{daily_spend} TK`\n"
         f"________________________\n\n"
-        f"ℹ️ আপনি যখনই প্রক্সি কিনবেন, তার সঠিক হিসাব এখানে দেখতে পাবেন।"
+        f"ℹ️ Apni jokhon-i proxy kinben, tar shothik hishab ekhane dekhte paben."
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -298,9 +308,9 @@ def handle_admin_dashboard(message):
     admin_summary = (
         "📊 **ADMIN DASHBOARD - USERS DUE/PAID**\n\n"
         "🛠 **Commands:**\n"
-        "`/addbalance <user_id> <amount>` - (Balance add করতে)\n"
-        "`/markpaid <user_id> <amount>` - (Paid অ্যামাউন্ট মার্ক করতে)\n"
-        "`/adddue <user_id> <amount>` - (Due যোগ করতে)"
+        "`/addbalance <user_id> <amount>` - (Balance add korar jonno)\n"
+        "`/markpaid <user_id> <amount>` - (Paid mark korar jonno)\n"
+        "`/adddue <user_id> <amount>` - (Due add korar jonno)"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -311,13 +321,16 @@ def handle_add_balance(message):
         return
     try:
         args = message.text.split()
-        target_user = args[1]
+        target_user = int(args[1])
         amount = float(args[2])
+        
+        # Save balance locally in memory
+        USER_BALANCES[target_user] = USER_BALANCES.get(target_user, 0.0) + amount
         
         try:
             bot.send_message(
                 target_user, 
-                f"✅ **Congratulations!** Your balance request of `{amount} TK` has been **Approved** by Admin.", 
+                f"✅ **Congratulations!** Your balance request of `{amount} TK` has been **Approved** by Admin.\nYour current balance is updated!", 
                 parse_mode='Markdown'
             )
         except Exception:
@@ -325,7 +338,7 @@ def handle_add_balance(message):
 
         bot.reply_to(message, f"✅ Successfully added `{amount} TK` balance for User ID `{target_user}`!", parse_mode='Markdown')
     except Exception:
-        bot.reply_to(message, "⚠️ Usage: `/addbalance <user_id> <amount>`\nExample: `/addbalance 6298284511 1000`", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ Usage: `/addbalance <user_id> <amount>`\nExample: `/addbalance 5763930051 100`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['markpaid'])
 def handle_mark_paid(message):
@@ -333,8 +346,12 @@ def handle_mark_paid(message):
         return
     try:
         args = message.text.split()
-        target_user = args[1]
+        target_user = int(args[1])
         amount = float(args[2])
+        
+        USER_PAID[target_user] = USER_PAID.get(target_user, 0.0) + amount
+        if target_user in USER_DUES:
+            USER_DUES[target_user] = max(0.0, USER_DUES[target_user] - amount)
         
         try:
             bot.send_message(target_user, f"✅ **Good News!** Your payment of `{amount} TK` has been marked as **Paid** by Admin.", parse_mode='Markdown')
@@ -343,7 +360,7 @@ def handle_mark_paid(message):
 
         bot.reply_to(message, f"✅ Successfully marked `{amount} TK` as **PAID** for user ID `{target_user}`!", parse_mode='Markdown')
     except Exception:
-        bot.reply_to(message, "⚠️ Usage: `/markpaid <user_id> <amount>`\nExample: `/markpaid 6298284511 1000`", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ Usage: `/markpaid <user_id> <amount>`\nExample: `/markpaid 5763930051 100`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['adddue'])
 def handle_add_due(message):
@@ -351,8 +368,10 @@ def handle_add_due(message):
         return
     try:
         args = message.text.split()
-        target_user = args[1]
+        target_user = int(args[1])
         amount = float(args[2])
+        
+        USER_DUES[target_user] = USER_DUES.get(target_user, 0.0) + amount
         bot.reply_to(message, f"🔴 Successfully added Due amount `{amount} TK` for User ID `{target_user}`!", parse_mode='Markdown')
     except Exception:
         bot.reply_to(message, "⚠️ Usage: `/adddue <user_id> <amount>`", parse_mode='Markdown')
@@ -361,7 +380,7 @@ def handle_add_due(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
 def handle_request_balance(call):
     admin_states[call.from_user.id] = 'waiting_for_request_amount'
-    bot.send_message(call.message.chat.id, "💰 কত টাকা Balance এড করতে চান লিখে পাঠান:")
+    bot.send_message(call.message.chat.id, "💰 Koto taka Balance add korte chan likhe pathan:")
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(func=lambda msg: admin_states.get(msg.from_user.id) == 'waiting_for_request_amount')
@@ -369,7 +388,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ আপনার {amount} TK এড করার রিকোয়েস্ট এডমিনের কাছে পাঠানো হয়েছে!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
