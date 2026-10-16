@@ -238,7 +238,6 @@ def build_history_message(user_id, page=1):
     text += f"\nTotal Spend : {total_spend} TK"
     return text
 
-# --- DUE QUERY MESSAGE BUILDER ---
 def generate_due_query_text(telegram_id):
     uid = str(telegram_id)
     u_data = get_user_db(uid)
@@ -408,12 +407,12 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-# 711 Proxy - Sub-User Authentication Format
-proxy_urls_list = []
-for _ in range(quantity):
-    session_id = random.randint(10000000, 99999999)
-    formatted_proxy = f"socks5://leadsbot07-zone-custom-region-{state_code}-session-{session_id}:123456bot@global.rotip.trustsource.live:20000"
-    proxy_urls_list.append(formatted_proxy)
+    # 711 Proxy - Sub-User Authentication Format (global.rotip.711proxy.com ডোমেইন সহ)[cite: 9]
+    proxy_urls_list = []
+    for _ in range(quantity):
+        session_id = random.randint(10000000, 99999999)
+        formatted_proxy = f"socks5://leadsbot07-zone-custom-region-{state_code}-session-{session_id}:123456bot@global.rotip.711proxy.com:20000"
+        proxy_urls_list.append(formatted_proxy)
 
     proxy_display_text = "\n".join(proxy_urls_list)
 
@@ -726,7 +725,7 @@ def send_welcome(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
     active_messages.pop(call.message.chat.id, None)
-    welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.message.chat.id)
+    welcome_text, markup = build_welcome_dashboard(call.message.from_user.first_name or "User", call.message.chat.id)
     
     try:
         bot.edit_message_text(
