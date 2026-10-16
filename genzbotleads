@@ -408,7 +408,7 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # 711 Proxy ড্যাশবোর্ডের সঠিক ফরম্যাট অনুযায়ী আপডেট করা (কোনো টাইমআউট দেখাবে না)
+    # 711 Proxy - Sub-User সেশন মেথড (IP Whitelist ছাড়া কানেক্ট করার জন্য সঠিক ফরম্যাট)
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(10000000, 99999999)
@@ -609,4 +609,167 @@ def handle_admin_paid_cmd(message):
         try:
             bot.send_message(
                 target_user, 
-                f"✅ **Good News!** Payment of `{pay_
+                f"✅ **Good News!** Payment of `{pay_amount} TK` received and adjusted starting from date `{target_date}`.", 
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+
+        bot.reply_to(message, f"✅ Successfully adjusted `{pay_amount} TK` payment starting from date `{target_date}`!", parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/paid <user_id> <YYYY-MM-DD> <amount>`\nExample: `/paid 5763930051 2026-10-16 1500`", parse_mode='Markdown')
+
+@bot.message_handler(commands=['addbalance'])
+def handle_add_balance(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized to use this command.")
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        amount = float(args[2])
+        
+        u_data = get_user_db(target_user)
+        u_data['balance'] += amount
+        
+        bd_date = (datetime.utcnow() + timedelta(hours=6)).strftime("%Y-%m-%d")
+        u_data['due_logs'].append({
+            'date': bd_date,
+            'price': amount,
+            'paid': 0.0
+        })
+        save_user_db(target_user, u_data)
+
+        try:
+            bot.send_message(
+                target_user, 
+                f"✅ **Congratulations!** Your balance request of `{amount} TK` has been **Approved** by Admin.\nYour current balance is updated!", 
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+
+        bot.reply_to(message, f"✅ Successfully added `{amount} TK` balance for User ID `{target_user}`!", parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/addbalance <user_id> <amount>`\nExample: `/addbalance 5763930051 100`", parse_mode='Markdown')
+
+@bot.message_handler(commands=['adddue'])
+def handle_add_due(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        amount = float(args[2])
+        
+        u_data = get_user_db(target_user)
+        u_data['due'] += amount
+        
+        bd_date = (datetime.utcnow() + timedelta(hours=6)).strftime("%Y-%m-%d")
+        u_data['due_logs'].append({
+            'date': bd_date,
+            'price': amount,
+            'paid': 0.0
+        })
+        save_user_db(target_user, u_data)
+
+        bot.reply_to(message, f"🔴 Successfully added Due amount `{amount} TK` for User ID `{target_user}`!", parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/adddue <user_id> <amount>`", parse_mode='Markdown')
+
+# --- REQUEST BALANCE ---
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
+def handle_request_balance(call):
+    admin_states[call.from_user.id] = 'waiting_for_request_amount'
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Cancel Request", callback_data="cancel_request"))
+    
+    bot.send_message(call.message.chat.id, "💰 Koto taka Balance add korte chan likhe pathan:", reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'cancel_request')
+def handle_cancel_request(call):
+    admin_states.pop(call.from_user.id, None)
+    try:
+        bot.edit_message_text(
+            "❌ Apnar balance request-ti batil kora hoyeche.",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id
+        )
+        bot.answer_callback_query(call.id, text="Request Cancelled!")
+    except Exception:
+        bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda msg: admin_states.get(msg.from_user.id) == 'waiting_for_request_amount')
+def process_request_amount(message):
+    admin_states.pop(message.from_user.id, None)
+    amount = message.text.strip()
+    
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
+    
+    admin_text = (
+        f"📥 **NEW BALANCE REQUEST!**\n\n"
+        f"👤 Name: {message.from_user.first_name}\n"
+        f"🆔 ID: `{message.from_user.id}`\n"
+        f"💵 Requested Amount: `{amount} TK`"
+    )
+    bot.send_message(ADMIN_ID, admin_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    active_messages.pop(message.chat.id, None)
+    user_name = message.from_user.first_name or "User"
+    welcome_text, markup = build_welcome_dashboard(user_name, message.from_user.id)
+    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
+def handle_back_to_welcome(call):
+    active_messages.pop(call.message.chat.id, None)
+    welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.message.chat.id)
+    
+    try:
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=welcome_text,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id)
+    except Exception:
+        bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
+def handle_pagination(call):
+    page = int(call.data.split('_')[1])
+    data = fetch_leads(page=page)
+    
+    if data:
+        msg_text, markup = build_lead_message(data)
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=msg_text,
+                reply_markup=markup
+            )
+            active_messages[call.message.chat.id] = {
+                'message_id': call.message.message_id,
+                'page': page
+            }
+            bot.answer_callback_query(call.id)
+        except Exception:
+            bot.answer_callback_query(call.id)
+    else:
+        bot.answer_callback_query(call.id)
+
+@app.route('/')
+def home():
+    return "Telegram Bot Server is Running!"
+
+if __name__ == '__main__':
+    threading.Thread(target=auto_refresh_loop, daemon=True).start()
+    port = int(os.environ.get('PORT', 5000))
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+    bot.infinity_polling()
