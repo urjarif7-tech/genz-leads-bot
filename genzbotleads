@@ -423,7 +423,7 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # 711 Proxy Official Panel Format matching Shadowrocket specification
+    # Direct backend generation (No API whitelisting/timeout issues)
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
@@ -745,7 +745,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
