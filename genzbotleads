@@ -50,18 +50,28 @@ init_db()
 def get_user_db(telegram_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (str(telegram_id),))
+    t_id = str(telegram_id).strip()
+    cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
     row = cursor.fetchone()
     conn.close()
 
     if row:
+        try:
+            purchases = json.loads(row[4]) if row[4] else []
+        except Exception:
+            purchases = []
+        try:
+            due_logs = json.loads(row[5]) if row[5] else []
+        except Exception:
+            due_logs = []
+
         return {
-            'balance': float(row[0]),
-            'spend': float(row[1]),
-            'due': float(row[2]),
-            'paid': float(row[3]),
-            'purchases': json.loads(row[4]),
-            'due_logs': json.loads(row[5])
+            'balance': float(row[0] or 0.0),
+            'spend': float(row[1] or 0.0),
+            'due': float(row[2] or 0.0),
+            'paid': float(row[3] or 0.0),
+            'purchases': purchases,
+            'due_logs': due_logs
         }
     else:
         return {
@@ -76,17 +86,18 @@ def get_user_db(telegram_id):
 def save_user_db(telegram_id, data):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    t_id = str(telegram_id).strip()
     cursor.execute('''
         INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (
-        str(telegram_id),
-        data['balance'],
-        data['spend'],
-        data['due'],
-        data['paid'],
-        json.dumps(data['purchases']),
-        json.dumps(data['due_logs'])
+        t_id,
+        float(data.get('balance', 0.0)),
+        float(data.get('spend', 0.0)),
+        float(data.get('due', 0.0)),
+        float(data.get('paid', 0.0)),
+        json.dumps(data.get('purchases', [])),
+        json.dumps(data.get('due_logs', []))
     ))
     conn.commit()
     conn.close()
@@ -114,7 +125,7 @@ def fetch_leads(page=1):
 
 def fetch_user_stats(telegram_id):
     try:
-        response = requests.get(USER_API_URL, params={'telegram_id': telegram_id}, timeout=10)
+        response = requests.get(USER_API_URL, params={'telegram_id': str(telegram_id)}, timeout=10)
         if response.status_code == 200:
             return response.json()
     except Exception as e:
@@ -123,15 +134,15 @@ def fetch_user_stats(telegram_id):
 
 def get_effective_balance(telegram_id):
     stats = fetch_user_stats(telegram_id)
-    api_bal = stats.get('balance', 0.0) if (stats and stats.get('registered')) else 0.0
+    api_bal = float(stats.get('balance', 0.0)) if (stats and isinstance(stats, dict) and stats.get('registered')) else 0.0
     u_data = get_user_db(telegram_id)
     return api_bal + u_data['balance']
 
 def build_welcome_dashboard(user_first_name, telegram_id):
     stats = fetch_user_stats(telegram_id)
-    api_daily_earnings = stats.get('daily_earnings', 0.0) if (stats and stats.get('registered')) else 0.0
+    api_daily_earnings = stats.get('daily_earnings', 0.0) if (stats and isinstance(stats, dict) and stats.get('registered')) else 0.0
     
-    uid = int(telegram_id)
+    uid = str(telegram_id)
     u_data = get_user_db(uid)
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
@@ -196,7 +207,7 @@ def build_lead_message(data):
     return message_text, markup
 
 def build_history_message(user_id, page=1):
-    uid = int(user_id)
+    uid = str(user_id)
     u_data = get_user_db(uid)
     history_list = u_data['purchases']
     
@@ -216,20 +227,20 @@ def build_history_message(user_id, page=1):
     text = f"📜 **PURCHASE HISTORY (User: {uid}) (Page {page}/{total_pages})**\n\n"
     for item in page_items:
         text += (
-            f"Date : {item['date']}\n"
-            f"Time : {item['time']}\n"
-            f"State : {item['state']}\n"
-            f"Quantity : {item['quantity']}   Cost : {item['cost']} TK\n"
+            f"Date : {item.get('date', 'N/A')}\n"
+            f"Time : {item.get('time', 'N/A')}\n"
+            f"State : {item.get('state', 'N/A')}\n"
+            f"Quantity : {item.get('quantity', 1)}   Cost : {item.get('cost', 0)} TK\n"
             f"----------------------------------------\n"
         )
 
-    total_spend = sum(item['cost'] for item in history_list)
+    total_spend = sum(float(item.get('cost', 0.0)) for item in history_list)
     text += f"\nTotal Spend : {total_spend} TK"
     return text
 
 # --- DUE QUERY MESSAGE BUILDER ---
 def generate_due_query_text(telegram_id):
-    uid = int(telegram_id)
+    uid = str(telegram_id)
     u_data = get_user_db(uid)
     logs = u_data['due_logs']
 
@@ -244,8 +255,8 @@ def generate_due_query_text(telegram_id):
     tot_paid = 0.0
 
     for entry in logs:
-        p = float(entry['price'])
-        pd = float(entry['paid'])
+        p = float(entry.get('price', 0.0))
+        pd = float(entry.get('paid', 0.0))
         rem = max(0.0, p - pd)
         
         tot_due += rem
@@ -254,7 +265,7 @@ def generate_due_query_text(telegram_id):
         status_tag = "✅ Paid" if rem == 0 else "🔴 Due"
         
         text += f"🛒 Balance {status_tag}\n"
-        text += f"Date:        {entry['date']}\n"
+        text += f"Date:        {entry.get('date', 'N/A')}\n"
         text += f"Price:       {p:,.1f} TK\n"
         text += f"Paid:        {pd:,.1f} TK\n"
         text += f"Remaining: {rem:,.1f} TK\n"
@@ -272,9 +283,9 @@ def generate_due_query_text(telegram_id):
     monthly_spend = defaultdict(float)
     for entry in logs:
         try:
-            e_date = datetime.strptime(entry['date'], "%Y-%m-%d")
+            e_date = datetime.strptime(entry.get('date', ''), "%Y-%m-%d")
             m_key = e_date.strftime("%Y-%m")
-            monthly_spend[m_key] += float(entry['price'])
+            monthly_spend[m_key] += float(entry.get('price', 0.0))
         except Exception:
             pass
 
@@ -380,7 +391,7 @@ def handle_buy_711_confirm(call):
         bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {cost} TK", show_alert=True)
         return
 
-    uid = int(call.from_user.id)
+    uid = str(call.from_user.id)
     u_data = get_user_db(uid)
     u_data['balance'] -= cost
     u_data['spend'] += cost
@@ -397,7 +408,7 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # সাব-ইউজার ও সেশন আইডি দিয়ে ডায়নামিক ও ফ্রেশ প্রক্সি জেনারেট করার লজিক (আইপি হোয়াইটলিস্ট ছাড়াই কাজ করবে)
+    # সাব-ইউজার ও সেশন আইডি দিয়ে ডায়নামিক ও ফ্রেশ প্রক্সি জেনারেট করার লজিক
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(10000000, 99999999)
@@ -469,14 +480,14 @@ def handle_user_history(call):
         text = f"📜 **PURCHASE HISTORY (Page {page}/{total_pages})**\n\n"
         for item in page_items:
             text += (
-                f"Date : {item['date']}\n"
-                f"Time : {item['time']}\n"
-                f"State : {item['state']}\n"
-                f"Quantity : {item['quantity']}   Cost : {item['cost']} TK\n"
+                f"Date : {item.get('date', 'N/A')}\n"
+                f"Time : {item.get('time', 'N/A')}\n"
+                f"State : {item.get('state', 'N/A')}\n"
+                f"Quantity : {item.get('quantity', 1)}   Cost : {item.get('cost', 0)} TK\n"
                 f"----------------------------------------\n"
             )
 
-        total_spend = sum(item['cost'] for item in history_list)
+        total_spend = sum(float(item.get('cost', 0.0)) for item in history_list)
         text += f"\nTotal Spend : {total_spend} TK"
 
         markup = types.InlineKeyboardMarkup()
@@ -530,7 +541,7 @@ def handle_admin_history_cmd(message):
         return
     try:
         args = message.text.split()
-        target_user = int(args[1])
+        target_user = args[1]
         hist_text = build_history_message(target_user, page=1)
         bot.send_message(message.chat.id, hist_text, parse_mode='Markdown')
     except Exception:
@@ -543,7 +554,7 @@ def handle_admin_due_cmd(message):
         return
     try:
         args = message.text.split()
-        target_user = int(args[1])
+        target_user = args[1]
         text, markup = generate_due_query_text(target_user)
         bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     except Exception:
@@ -556,7 +567,7 @@ def handle_admin_paid_cmd(message):
         return
     try:
         args = message.text.split()
-        target_user = int(args[1])
+        target_user = args[1]
         target_date = args[2]
         pay_amount = float(args[3])
 
@@ -568,7 +579,7 @@ def handle_admin_paid_cmd(message):
 
         start_idx = -1
         for idx, entry in enumerate(logs):
-            if entry['date'] == target_date:
+            if entry.get('date') == target_date:
                 start_idx = idx
                 break
 
@@ -582,14 +593,14 @@ def handle_admin_paid_cmd(message):
                 break
             
             entry = logs[i]
-            needed = float(entry['price']) - float(entry['paid'])
+            needed = float(entry.get('price', 0.0)) - float(entry.get('paid', 0.0))
 
             if needed > 0:
                 if remaining_pay >= needed:
-                    entry['paid'] = float(entry['paid']) + needed
+                    entry['paid'] = float(entry.get('paid', 0.0)) + needed
                     remaining_pay -= needed
                 else:
-                    entry['paid'] = float(entry['paid']) + remaining_pay
+                    entry['paid'] = float(entry.get('paid', 0.0)) + remaining_pay
                     remaining_pay = 0
 
         u_data['paid'] += pay_amount
@@ -615,7 +626,7 @@ def handle_add_balance(message):
         return
     try:
         args = message.text.split()
-        target_user = int(args[1])
+        target_user = args[1]
         amount = float(args[2])
         
         u_data = get_user_db(target_user)
@@ -648,7 +659,7 @@ def handle_add_due(message):
         return
     try:
         args = message.text.split()
-        target_user = int(args[1])
+        target_user = args[1]
         amount = float(args[2])
         
         u_data = get_user_db(target_user)
