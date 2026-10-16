@@ -267,8 +267,8 @@ def handle_buy_711_confirm(call):
     USER_SPEND[uid] = USER_SPEND.get(uid, 0.0) + cost
     USER_DUES[uid] = USER_DUES.get(uid, 0.0) + cost
 
-    # Record Purchase History Log with Bangladesh Time (UTC+6)
-    bd_time = datetime.now(timezone(timedelta(hours=6)))
+    # Record Purchase History Log with accurate Bangladesh Time (UTC+6)
+    bd_time = datetime.utcnow() + timedelta(hours=6)
     purchase_log = {
         'date': bd_time.strftime("%d/%m/%Y"),
         'time': bd_time.strftime("%I:%M %p").lower(),
