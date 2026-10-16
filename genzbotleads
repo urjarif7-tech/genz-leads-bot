@@ -447,18 +447,28 @@ def handle_buy_711_confirm(call):
         f"📍 Proxy:\n`{proxy_display_text}`"
     )
 
-    # NexLabs স্টাইলের বাটন (States এবং Back)
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_states = types.InlineKeyboardButton("🦊 States", callback_data="prov_711proxy")
-    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
-    markup.add(btn_states, btn_back)
-
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
         pass
         
-    bot.send_photo(call.message.chat.id, photo=img_byte_arr, caption=caption, parse_mode='Markdown', reply_markup=markup)
+    # প্রথমে কিউআর কোড এবং প্রক্সি ডিটেইলসের মেসেজটি পাঠানো (কোনো বাটন ছাড়া)
+    bot.send_photo(call.message.chat.id, photo=img_byte_arr, caption=caption, parse_mode='Markdown')
+
+    # NexLab-এর মতো আলাদা মেসেজে টোটাল চার্জ, ব্যালেন্স এবং বাটনগুলো পাঠানো
+    remaining_balance = get_effective_balance(call.from_user.id)
+    summary_text = (
+        f"────────────────────────\n"
+        f"💳 Total Charged: {cost} TK\n\n"
+        f"Remaining Balance: {remaining_balance} TK"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn_states = types.InlineKeyboardButton("🦊 States", callback_data="prov_711proxy")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+    markup.add(btn_states, btn_back)
+
+    bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
 # --- USER DUE QUERY HANDLER ---
