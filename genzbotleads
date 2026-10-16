@@ -25,6 +25,7 @@ admin_states = {}
 USER_BALANCES = {}
 USER_DUES = {}
 USER_PAID = {}
+USER_SPEND = {}
 
 # US States List for 711 Proxy
 US_STATES = [
@@ -49,7 +50,7 @@ def fetch_leads(page=1):
 
 def fetch_user_stats(telegram_id):
     try:
-        response = requests.get(f"{USER_API_URL}?telegram_id={telegram_id}", timeout=10)
+        response = requests.get(USER_API_URL, params={'telegram_id': telegram_id}, timeout=10)
         if response.status_code == 200:
             return response.json()
     except Exception as e:
@@ -64,18 +65,15 @@ def get_effective_balance(telegram_id):
 
 def build_welcome_dashboard(user_first_name, telegram_id):
     stats = fetch_user_stats(telegram_id)
-    daily_earnings = 0.0
-    daily_spend = 0.0
+    api_daily_earnings = stats.get('daily_earnings', 0.0) if (stats and stats.get('registered')) else 0.0
     
-    if stats and stats.get('registered'):
-        daily_earnings = stats.get('daily_earnings', 0.0)
-        daily_spend = stats.get('daily_spend', 0.0)
-
+    uid = int(telegram_id)
+    daily_spend = USER_SPEND.get(uid, 0.0)
     balance = get_effective_balance(telegram_id)
 
     welcome_text = (
         f"👋 **Welcome {user_first_name}!**\n\n"
-        f"`Daily Earnings: {daily_earnings} TK`\n"
+        f"`Daily Earnings: {api_daily_earnings} TK`\n"
         f"`Daily Spend: {daily_spend} TK`\n"
         f"`Balance: {balance} TK`\n\n"
         f"Click the button below to view live leads or buy proxy."
@@ -216,17 +214,29 @@ def handle_buy_711_confirm(call):
         return
 
     uid = int(call.from_user.id)
+    # Deduct from balance
     USER_BALANCES[uid] = USER_BALANCES.get(uid, 0.0) - cost
+    # Add to spend & due
+    USER_SPEND[uid] = USER_SPEND.get(uid, 0.0) + cost
+    USER_DUES[uid] = USER_DUES.get(uid, 0.0) + cost
 
-    proxy_str = f"proxy.711proxy.com:8080:user_{call.from_user.id}:pass123"
+    ip_port_user_pass = f"proxy.711proxy.com:8080:user_{call.from_user.id}:pass123"
     try:
         res = requests.get(PROXY_711_URL, timeout=10)
         if res.status_code == 200:
             text_data = res.text.strip()
             if text_data:
-                proxy_str = text_data.split('\n')[0].strip()
+                ip_port_user_pass = text_data.split('\n')[0].strip()
     except Exception as e:
         print(f"711 Proxy API Error: {e}")
+
+    # Format proxy for Shadowrocket (SOCKS5 scheme)
+    p_parts = ip_port_user_pass.split(':')
+    if len(p_parts) >= 4:
+        host, port, username, password = p_parts[0], p_parts[1], p_parts[2], p_parts[3]
+        proxy_url = f"socks5://{username}:{password}@{host}:{port}"
+    else:
+        proxy_url = f"socks5://{ip_port_user_pass}"
 
     admin_alert = (
         f"🛒 **NEW PROXY PURCHASE (DUE)!**\n\n"
@@ -235,7 +245,7 @@ def handle_buy_711_confirm(call):
         f"📦 Quantity: {quantity}x\n"
         f"🔴 Status: Due\n"
         f"💵 Amount: `{cost} TK`\n"
-        f"📍 Proxy: `{proxy_str}`"
+        f"📍 Proxy: `{proxy_url}`"
     )
     try:
         bot.send_message(ADMIN_ID, admin_alert, parse_mode='Markdown')
@@ -243,7 +253,7 @@ def handle_buy_711_confirm(call):
         pass
 
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(proxy_str)
+    qr.add_data(proxy_url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
 
@@ -255,7 +265,7 @@ def handle_buy_711_confirm(call):
         f"✅ **PROXY VERIFIED & ADDED TO DUE ({quantity}/{quantity})**\n\n"
         f"🔴 Status: Due ({cost} TK)\n"
         f"🌐 711 Proxy ({state_name}, United States)\n"
-        f"📍 Proxy: `{proxy_str}`"
+        f"📍 Proxy: `{proxy_url}`"
     )
 
     bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -269,11 +279,11 @@ def handle_user_history(call):
     uid = int(call.from_user.id)
     api_due = stats.get('total_due', 0.0) if (stats and stats.get('registered')) else 0.0
     api_paid = stats.get('total_paid', 0.0) if (stats and stats.get('registered')) else 0.0
-    daily_spend = stats.get('daily_spend', 0.0) if (stats and stats.get('registered')) else 0.0
-
+    
     total_due = api_due + USER_DUES.get(uid, 0.0)
     total_paid = api_paid + USER_PAID.get(uid, 0.0)
     balance = get_effective_balance(call.from_user.id)
+    daily_spend = USER_SPEND.get(uid, 0.0)
 
     history_text = (
         f"📜 **PURCHASE & TRANSACTION HISTORY**\n\n"
@@ -283,7 +293,7 @@ def handle_user_history(call):
         f"💳 **Current Balance:** `{balance} TK`\n"
         f"🛍️ **Today's Spend:** `{daily_spend} TK`\n"
         f"________________________\n\n"
-        f"ℹ️ Apni jokhon-i proxy kinben, tar shothik hishab ekhane dekhte paben."
+        f"ℹ️ আপনি যখনই প্রক্সি কিনবেন, তার সঠিক হিসাব এখানে দেখতে পাবেন।"
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
