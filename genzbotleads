@@ -2,10 +2,11 @@ import os
 import time
 import io
 import threading
-import sqlite3
 import json
 import requests
 import qrcode
+import firebase_admin
+from firebase_admin import credentials, firestore
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -25,43 +26,33 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
-# --- SQLite Database Setup ---
-DB_FILE = "bot_database.db"
+# --- Firebase Initialization ---
+firebase_key_json = os.environ.get('FIREBASE_KEY_JSON')
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 0.0,
-            spend REAL DEFAULT 0.0,
-            due REAL DEFAULT 0.0,
-            paid REAL DEFAULT 0.0,
-            purchases TEXT DEFAULT '[]',
-            due_logs TEXT DEFAULT '[]'
-        )
-    ''')
-    conn.commit()
-    conn.close()
+if firebase_key_json:
+    cred_dict = json.loads(firebase_key_json)
+    cred = credentials.Certificate(cred_dict)
+elif os.path.exists('firebase_key.json'):
+    cred = credentials.Certificate('firebase_key.json')
+else:
+    raise RuntimeError("Firebase Key missing! Provide firebase_key.json or FIREBASE_KEY_JSON environment variable.")
 
-init_db()
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 def get_user_db(telegram_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (telegram_id,))
-    row = cursor.fetchone()
-    conn.close()
+    doc_ref = db.collection('users').document(str(telegram_id))
+    doc = doc_ref.get()
     
-    if row:
+    if doc.exists:
+        data = doc.to_dict()
         return {
-            'balance': row[0],
-            'spend': row[1],
-            'due': row[2],
-            'paid': row[3],
-            'purchases': json.loads(row[4]),
-            'due_logs': json.loads(row[5])
+            'balance': float(data.get('balance', 0.0)),
+            'spend': float(data.get('spend', 0.0)),
+            'due': float(data.get('due', 0.0)),
+            'paid': float(data.get('paid', 0.0)),
+            'purchases': data.get('purchases', []),
+            'due_logs': data.get('due_logs', [])
         }
     else:
         return {
@@ -74,29 +65,8 @@ def get_user_db(telegram_id):
         }
 
 def save_user_db(telegram_id, data):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(telegram_id) DO UPDATE SET
-            balance = excluded.balance,
-            spend = excluded.spend,
-            due = excluded.due,
-            paid = excluded.paid,
-            purchases = excluded.purchases,
-            due_logs = excluded.due_logs
-    ''', (
-        telegram_id,
-        data['balance'],
-        data['spend'],
-        data['due'],
-        data['paid'],
-        json.dumps(data['purchases']),
-        json.dumps(data['due_logs'])
-    ))
-    conn.commit()
-    conn.close()
+    doc_ref = db.collection('users').document(str(telegram_id))
+    doc_ref.set(data, merge=True)
 
 # US States List for 711 Proxy
 US_STATES = [
@@ -267,8 +237,8 @@ def generate_due_query_text(telegram_id):
     tot_paid = 0.0
 
     for entry in logs:
-        p = entry['price']
-        pd = entry['paid']
+        p = float(entry['price'])
+        pd = float(entry['paid'])
         rem = max(0.0, p - pd)
         
         tot_due += rem
@@ -297,7 +267,7 @@ def generate_due_query_text(telegram_id):
         try:
             e_date = datetime.strptime(entry['date'], "%Y-%m-%d")
             m_key = e_date.strftime("%Y-%m")
-            monthly_spend[m_key] += entry['price']
+            monthly_spend[m_key] += float(entry['price'])
         except Exception:
             pass
 
@@ -571,14 +541,14 @@ def handle_admin_paid_cmd(message):
                 break
             
             entry = logs[i]
-            needed = entry['price'] - entry['paid']
+            needed = float(entry['price']) - float(entry['paid'])
 
             if needed > 0:
                 if remaining_pay >= needed:
-                    entry['paid'] += needed
+                    entry['paid'] = float(entry['paid']) + needed
                     remaining_pay -= needed
                 else:
-                    entry['paid'] += remaining_pay
+                    entry['paid'] = float(entry['paid']) + remaining_pay
                     remaining_pay = 0
 
         u_data['paid'] += pay_amount
