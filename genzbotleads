@@ -2,6 +2,8 @@ import os
 import time
 import io
 import threading
+import sqlite3
+import json
 import requests
 import qrcode
 from datetime import datetime, timezone, timedelta
@@ -23,13 +25,78 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
-# Local Memory Data Structures
-USER_BALANCES = {}
-USER_DUES = {}
-USER_PAID = {}
-USER_SPEND = {}
-USER_PURCHASES = {}  # Stores proxy purchase history logs per user
-USER_DUE_LOGS = defaultdict(list) # Stores user due balance logs: {'date': 'YYYY-MM-DD', 'price': float, 'paid': float}
+# --- SQLite Database Setup ---
+DB_FILE = "bot_database.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id INTEGER PRIMARY KEY,
+            balance REAL DEFAULT 0.0,
+            spend REAL DEFAULT 0.0,
+            due REAL DEFAULT 0.0,
+            paid REAL DEFAULT 0.0,
+            purchases TEXT DEFAULT '[]',
+            due_logs TEXT DEFAULT '[]'
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_user_db(telegram_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (telegram_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            'balance': row[0],
+            'spend': row[1],
+            'due': row[2],
+            'paid': row[3],
+            'purchases': json.loads(row[4]),
+            'due_logs': json.loads(row[5])
+        }
+    else:
+        return {
+            'balance': 0.0,
+            'spend': 0.0,
+            'due': 0.0,
+            'paid': 0.0,
+            'purchases': [],
+            'due_logs': []
+        }
+
+def save_user_db(telegram_id, data):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            balance = excluded.balance,
+            spend = excluded.spend,
+            due = excluded.due,
+            paid = excluded.paid,
+            purchases = excluded.purchases,
+            due_logs = excluded.due_logs
+    ''', (
+        telegram_id,
+        data['balance'],
+        data['spend'],
+        data['due'],
+        data['paid'],
+        json.dumps(data['purchases']),
+        json.dumps(data['due_logs'])
+    ))
+    conn.commit()
+    conn.close()
 
 # US States List for 711 Proxy
 US_STATES = [
@@ -64,15 +131,16 @@ def fetch_user_stats(telegram_id):
 def get_effective_balance(telegram_id):
     stats = fetch_user_stats(telegram_id)
     api_bal = stats.get('balance', 0.0) if (stats and stats.get('registered')) else 0.0
-    local_add = USER_BALANCES.get(int(telegram_id), 0.0)
-    return api_bal + local_add
+    u_data = get_user_db(telegram_id)
+    return api_bal + u_data['balance']
 
 def build_welcome_dashboard(user_first_name, telegram_id):
     stats = fetch_user_stats(telegram_id)
     api_daily_earnings = stats.get('daily_earnings', 0.0) if (stats and stats.get('registered')) else 0.0
     
     uid = int(telegram_id)
-    daily_spend = USER_SPEND.get(uid, 0.0)
+    u_data = get_user_db(uid)
+    daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
     welcome_text = (
@@ -136,7 +204,8 @@ def build_lead_message(data):
 
 def build_history_message(user_id, page=1):
     uid = int(user_id)
-    history_list = USER_PURCHASES.get(uid, [])
+    u_data = get_user_db(uid)
+    history_list = u_data['purchases']
     
     if not history_list:
         text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো প্রক্সি কেনেননি।"
@@ -184,7 +253,8 @@ def build_history_message(user_id, page=1):
 # --- DUE QUERY MESSAGE BUILDER ---
 def generate_due_query_text(telegram_id):
     uid = int(telegram_id)
-    logs = USER_DUE_LOGS.get(uid, [])
+    u_data = get_user_db(uid)
+    logs = u_data['due_logs']
 
     if not logs:
         text = "📋 **DUE QUERY**\n\n❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
@@ -222,7 +292,6 @@ def generate_due_query_text(telegram_id):
     text += "-------------------------\n"
     text += "MONTHLY SPENDING\n"
 
-    # Monthly Spending calculation for last 5 months
     monthly_spend = defaultdict(float)
     for entry in logs:
         try:
@@ -335,11 +404,11 @@ def handle_buy_711_confirm(call):
         return
 
     uid = int(call.from_user.id)
-    USER_BALANCES[uid] = USER_BALANCES.get(uid, 0.0) - cost
-    USER_SPEND[uid] = USER_SPEND.get(uid, 0.0) + cost
-    USER_DUES[uid] = USER_DUES.get(uid, 0.0) + cost
+    u_data = get_user_db(uid)
+    u_data['balance'] -= cost
+    u_data['spend'] += cost
+    u_data['due'] += cost
 
-    # Record Purchase History Log with accurate Bangladesh Time (UTC+6)
     bd_time = datetime.utcnow() + timedelta(hours=6)
     purchase_log = {
         'date': bd_time.strftime("%d/%m/%Y"),
@@ -348,9 +417,8 @@ def handle_buy_711_confirm(call):
         'quantity': quantity,
         'cost': cost
     }
-    if uid not in USER_PURCHASES:
-        USER_PURCHASES[uid] = []
-    USER_PURCHASES[uid].insert(0, purchase_log)
+    u_data['purchases'].insert(0, purchase_log)
+    save_user_db(uid, u_data)
 
     ip_port_user_pass = "proxy.711proxy.com:8080:USER702036:60b3d6"
     try:
@@ -478,10 +546,11 @@ def handle_admin_paid_cmd(message):
     try:
         args = message.text.split()
         target_user = int(args[1])
-        target_date = args[2]  # Format: YYYY-MM-DD
+        target_date = args[2]
         pay_amount = float(args[3])
 
-        logs = USER_DUE_LOGS.get(target_user, [])
+        u_data = get_user_db(target_user)
+        logs = u_data['due_logs']
         if not logs:
             bot.reply_to(message, "❌ No due logs found for this user!")
             return
@@ -512,7 +581,8 @@ def handle_admin_paid_cmd(message):
                     entry['paid'] += remaining_pay
                     remaining_pay = 0
 
-        USER_PAID[target_user] = USER_PAID.get(target_user, 0.0) + pay_amount
+        u_data['paid'] += pay_amount
+        save_user_db(target_user, u_data)
 
         try:
             bot.send_message(
@@ -537,15 +607,16 @@ def handle_add_balance(message):
         target_user = int(args[1])
         amount = float(args[2])
         
-        USER_BALANCES[target_user] = USER_BALANCES.get(target_user, 0.0) + amount
+        u_data = get_user_db(target_user)
+        u_data['balance'] += amount
         
-        # Log to Due Entries with YYYY-MM-DD format (Current Date: 2026-10-16)
         bd_date = (datetime.utcnow() + timedelta(hours=6)).strftime("%Y-%m-%d")
-        USER_DUE_LOGS[target_user].append({
+        u_data['due_logs'].append({
             'date': bd_date,
             'price': amount,
             'paid': 0.0
         })
+        save_user_db(target_user, u_data)
 
         try:
             bot.send_message(
@@ -569,14 +640,16 @@ def handle_add_due(message):
         target_user = int(args[1])
         amount = float(args[2])
         
-        USER_DUES[target_user] = USER_DUES.get(target_user, 0.0) + amount
+        u_data = get_user_db(target_user)
+        u_data['due'] += amount
         
         bd_date = (datetime.utcnow() + timedelta(hours=6)).strftime("%Y-%m-%d")
-        USER_DUE_LOGS[target_user].append({
+        u_data['due_logs'].append({
             'date': bd_date,
             'price': amount,
             'paid': 0.0
         })
+        save_user_db(target_user, u_data)
 
         bot.reply_to(message, f"🔴 Successfully added Due amount `{amount} TK` for User ID `{target_user}`!", parse_mode='Markdown')
     except Exception:
@@ -611,7 +684,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
