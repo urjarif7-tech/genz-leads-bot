@@ -395,7 +395,7 @@ def handle_state_quantity(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_711_'))
 def handle_buy_711_confirm(call):
     parts = call.data.split('_')
-    state_code = parts[2].upper()
+    state_code = parts[2].lower()
     state_name = parts[2].capitalize()
     quantity = int(parts[3])
     cost = quantity * 5.0
@@ -423,11 +423,16 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # 711 Proxy - Dynamic Session ID Format for better speed and stability
+    # 711 Proxy - Official Panel Format with proper region & session structure
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
-        formatted_proxy = f"socks5://leadsbot07-{session_id}:123456bot@global.rotip.711proxy.com:20000"
+        username = f"leadsbot07-zone-custom-region-{state_code}-session-{session_id}"
+        password = "123456bot"
+        host = "global.rotip.711proxy.com"
+        port = "20000"
+        
+        formatted_proxy = f"{host}:{port}:{username}:{password}"
         proxy_urls_list.append(formatted_proxy)
 
     proxy_display_text = "\n".join(proxy_urls_list)
