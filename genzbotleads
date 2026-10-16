@@ -254,25 +254,27 @@ def handle_buy_711_confirm(call):
 @bot.callback_query_handler(func=lambda call: call.data == 'user_history')
 def handle_user_history(call):
     stats = fetch_user_stats(call.from_user.id)
-    balance = stats.get('balance', 0.0) if stats else 0.0
+    
+    total_due = 0.0
+    total_paid = 0.0
+    balance = 0.0
+    daily_spend = 0.0
+    
+    if stats and stats.get('registered'):
+        total_due = stats.get('total_due', 0.0)
+        total_paid = stats.get('total_paid', 0.0)
+        balance = stats.get('balance', 0.0)
+        daily_spend = stats.get('daily_spend', 0.0)
 
     history_text = (
-        f"🛒 Balance 🔴 **Due**\n"
-        f"Date: `2026-10-03`\n"
-        f"Price: `2,000.0 TK`\n"
-        f"Paid: `0.0 TK`\n"
-        f"Remaining: `2,000.0 TK`\n"
+        f"📜 **PURCHASE & TRANSACTION HISTORY**\n\n"
+        f"________________________\n"
+        f"🔴 **Total Due:** `{total_due} TK`\n"
+        f"🟢 **Total Paid:** `{total_paid} TK`\n"
+        f"💳 **Current Balance:** `{balance} TK`\n"
+        f"🛍️ **Today's Spend:** `{daily_spend} TK`\n"
         f"________________________\n\n"
-        f"Total Due: `14,500.0 TK`\n"
-        f"Total Paid: `20,620.0 TK`\n"
-        f"Balance: `{balance} TK`\n"
-        f"________________________\n\n"
-        f"**MONTHLY SPENDING**\n"
-        f"2026-10: `2,000.0 TK`\n"
-        f"2026-09: `8,000.0 TK`\n"
-        f"2026-08: `12,000.0 TK`\n"
-        f"2026-07: `9,500.0 TK`\n"
-        f"2026-06: `1,600.0 TK`"
+        f"ℹ️ আপনি যখনই প্রক্সি কিনবেন, তার সঠিক হিসাব এখানে দেখতে পাবেন।"
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -295,15 +297,35 @@ def handle_admin_dashboard(message):
 
     admin_summary = (
         "📊 **ADMIN DASHBOARD - USERS DUE/PAID**\n\n"
-        "👤 **User:** Sk (`12345678`)\n"
-        "▫️ Total Paid: `20,620.0 TK`\n"
-        "▫️ Total Due: `14,500.0 TK`\n"
-        "________________________\n\n"
         "🛠 **Commands:**\n"
-        "`/markpaid <user_id>` - (Paid করতে)\n"
+        "`/addbalance <user_id> <amount>` - (Balance add করতে)\n"
+        "`/markpaid <user_id> <amount>` - (Paid অ্যামাউন্ট মার্ক করতে)\n"
         "`/adddue <user_id> <amount>` - (Due যোগ করতে)"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
+
+@bot.message_handler(commands=['addbalance'])
+def handle_add_balance(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized to use this command.")
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        amount = float(args[2])
+        
+        try:
+            bot.send_message(
+                target_user, 
+                f"✅ **Congratulations!** Your balance request of `{amount} TK` has been **Approved** by Admin.", 
+                parse_mode='Markdown'
+            )
+        except Exception:
+            pass
+
+        bot.reply_to(message, f"✅ Successfully added `{amount} TK` balance for User ID `{target_user}`!", parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/addbalance <user_id> <amount>`\nExample: `/addbalance 6298284511 1000`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['markpaid'])
 def handle_mark_paid(message):
@@ -312,15 +334,16 @@ def handle_mark_paid(message):
     try:
         args = message.text.split()
         target_user = args[1]
+        amount = float(args[2])
         
         try:
-            bot.send_message(target_user, "✅ **Good News!** Your due balance has been marked as **Paid** by Admin.", parse_mode='Markdown')
+            bot.send_message(target_user, f"✅ **Good News!** Your payment of `{amount} TK` has been marked as **Paid** by Admin.", parse_mode='Markdown')
         except Exception:
             pass
 
-        bot.reply_to(message, f"✅ Successfully marked user ID `{target_user}` as **PAID**!", parse_mode='Markdown')
+        bot.reply_to(message, f"✅ Successfully marked `{amount} TK` as **PAID** for user ID `{target_user}`!", parse_mode='Markdown')
     except Exception:
-        bot.reply_to(message, "⚠️ Usage: `/markpaid <user_id>`", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ Usage: `/markpaid <user_id> <amount>`\nExample: `/markpaid 6298284511 1000`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['adddue'])
 def handle_add_due(message):
@@ -366,7 +389,6 @@ def send_welcome(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
     active_messages.pop(call.message.chat.id, None)
-    user_name = call.close_user.first_name if hasattr(call, 'close_user') else "User"
     welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.message.chat.id)
     
     try:
