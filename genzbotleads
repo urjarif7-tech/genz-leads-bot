@@ -16,6 +16,9 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAFTySiiJuCRAE8d5FReU42XRXRN
 API_URL = 'https://genzreward.com/api/live-leads-bot'
 USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 
+# Cliproxy API Credentials
+CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
+
 # --- Configuration ---
 ADMIN_ID = 7089010379
 
@@ -406,6 +409,29 @@ def handle_buy_clip_confirm(call):
         bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {cost} TK", show_alert=True)
         return
 
+    # Fetching Proxy from Cliproxy API
+    proxy_urls_list = []
+    try:
+        clip_api = f"https://webipapi.cliproxy.com/api/getIpInfo?key={CLIPROXY_KEY}&port=443&num={quantity}&country=US&state={state_name}&type=2"
+        res = requests.get(clip_api, timeout=10)
+        if res.status_code == 200:
+            lines = res.text.strip().splitlines()
+            for line in lines:
+                if line.strip():
+                    proxy_urls_list.append(line.strip())
+    except Exception as e:
+        print(f"Cliproxy API Error: {e}")
+
+    # Fallback to local format generation if API fails or returns empty
+    if not proxy_urls_list:
+        for _ in range(quantity):
+            session_id = random.randint(100000, 999999)
+            username = f"leadsbot07-zone-custom-region-{state_code}-session-{session_id}"
+            password = "123456bot"
+            host = "global.rotip.711proxy.com"
+            port = "20000"
+            proxy_urls_list.append(f"http://{username}:{password}@{host}:{port}")
+
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
     u_data['balance'] -= cost
@@ -423,18 +449,6 @@ def handle_buy_clip_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # Cliproxy format generation
-    proxy_urls_list = []
-    for _ in range(quantity):
-        session_id = random.randint(100000, 999999)
-        username = f"leadsbot07-zone-custom-region-{state_code}-session-{session_id}"
-        password = "123456bot"
-        host = "global.rotip.711proxy.com"
-        port = "20000"
-        
-        formatted_proxy = f"http://{username}:{password}@{host}:{port}"
-        proxy_urls_list.append(formatted_proxy)
-
     proxy_display_text = "\n".join(proxy_urls_list)
 
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
@@ -447,7 +461,7 @@ def handle_buy_clip_confirm(call):
     img_byte_arr.seek(0)
 
     caption = (
-        f"✅ **PROXY VERIFIED & CHARGED ({quantity}/{quantity})**\n\n"
+        f"✅ **PROXY VERIFIED & CHARGED ({len(proxy_urls_list)}/{quantity})**\n\n"
         f"💳 Charged: {cost} TK\n"
         f"🌐 Cliproxy (States) ({state_name}, United States)\n"
         f"📍 Proxy:\n`{proxy_display_text}`"
