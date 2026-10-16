@@ -407,11 +407,11 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # 711 Proxy - Sub-User Authentication Format (global.rotip.711proxy.com ডোমেইন সহ)[cite: 9]
+ # 711 Proxy - Simple Sub-User Authentication Format
     proxy_urls_list = []
     for _ in range(quantity):
-        session_id = random.randint(10000000, 99999999)
-        formatted_proxy = f"socks5://leadsbot07-zone-custom-region-{state_code}-session-{session_id}:123456bot@global.rotip.711proxy.com:20000"
+        # অন্য বটগুলোর মতো সিম্পল ফরম্যাট যা সরাসরি 711 Proxy সার্ভারে হিট করে
+        formatted_proxy = f"socks5://leadsbot07:123456bot@global.rotip.711proxy.com:20000"
         proxy_urls_list.append(formatted_proxy)
 
     proxy_display_text = "\n".join(proxy_urls_list)
