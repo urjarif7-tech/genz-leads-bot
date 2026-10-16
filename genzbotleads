@@ -408,7 +408,7 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # সাব-ইউজার ও সেশন আইডি দিয়ে ডায়নামিক ও ফ্রেশ প্রক্সি জেনারেট করার লজিক
+    # সঠিক ও নিখুঁত 711 Proxy ফরম্যাট যা Shadowrocket-এ কোনো Timeout ছাড়াই কাজ করবে
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(10000000, 99999999)
