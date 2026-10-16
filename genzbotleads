@@ -423,7 +423,7 @@ def handle_buy_711_confirm(call):
     u_data['purchases'].insert(0, purchase_log)
     save_user_db(uid, u_data)
 
-    # 711 Proxy - Official Panel Format with proper region & session structure
+    # 711 Proxy - Shadowrocket Compatible Format (socks5://user:pass@host:port)
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
@@ -432,7 +432,7 @@ def handle_buy_711_confirm(call):
         host = "global.rotip.711proxy.com"
         port = "20000"
         
-        formatted_proxy = f"{host}:{port}:{username}:{password}"
+        formatted_proxy = f"socks5://{username}:{password}@{host}:{port}"
         proxy_urls_list.append(formatted_proxy)
 
     proxy_display_text = "\n".join(proxy_urls_list)
@@ -461,7 +461,7 @@ def handle_buy_711_confirm(call):
     # প্রথমে কিউআর কোড এবং প্রক্সি ডিটেইলসের মেসেজটি পাঠানো (কোনো বাটন ছাড়া)
     bot.send_photo(call.message.chat.id, photo=img_byte_arr, caption=caption, parse_mode='Markdown')
 
-    # NexLab-এর মতো আলাদা মেসেজে টোটাল চার্জ, ব্যালেন্স এবং বাটনগুলো পাঠানো
+    # আলাদা মেসেজে টোটাল চার্জ, ব্যালেন্স এবং বাটনগুলো পাঠানো
     remaining_balance = get_effective_balance(call.from_user.id)
     summary_text = (
         f"────────────────────────\n"
