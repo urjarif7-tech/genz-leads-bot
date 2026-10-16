@@ -178,10 +178,8 @@ def build_history_message(user_id, page=1):
     history_list = u_data['purchases']
     
     if not history_list:
-        text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো প্রক্সি কেনেননি।"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
-        return text, markup
+        text = f"📜 **PURCHASE HISTORY (User ID: {uid})**\n\n❌ এই ইউজারের কোনো প্রক্সি কেনার ইতিহাস নেই।"
+        return text
 
     items_per_page = 5
     total_items = len(history_list)
@@ -192,7 +190,7 @@ def build_history_message(user_id, page=1):
     end_idx = start_idx + items_per_page
     page_items = history_list[start_idx:end_idx]
 
-    text = f"📜 **PURCHASE HISTORY (Page {page}/{total_pages})**\n\n"
+    text = f"📜 **PURCHASE HISTORY (User: {uid}) (Page {page}/{total_pages})**\n\n"
     for item in page_items:
         text += (
             f"Date : {item['date']}\n"
@@ -204,21 +202,7 @@ def build_history_message(user_id, page=1):
 
     total_spend = sum(item['cost'] for item in history_list)
     text += f"\nTotal Spend : {total_spend} TK"
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"historypage_{page}"))
-
-    nav_buttons = []
-    if page > 1:
-        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"historypage_{page - 1}"))
-    if page < total_pages:
-        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"historypage_{page + 1}"))
-
-    if nav_buttons:
-        markup.row(*nav_buttons)
-
-    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
-    return text, markup
+    return text
 
 # --- DUE QUERY MESSAGE BUILDER ---
 def generate_due_query_text(telegram_id):
@@ -407,20 +391,6 @@ def handle_buy_711_confirm(call):
     else:
         proxy_url = f"socks5://{ip_port_user_pass}"
 
-    admin_alert = (
-        f"🛒 **NEW PROXY PURCHASE (DUE)!**\n\n"
-        f"👤 User: {call.from_user.first_name} (`{call.from_user.id}`)\n"
-        f"🌐 Provider: 711 Proxy ({state_name})\n"
-        f"📦 Quantity: {quantity}x\n"
-        f"🔴 Status: Due\n"
-        f"💵 Amount: `{cost} TK`\n"
-        f"📍 Proxy: `{proxy_url}`"
-    )
-    try:
-        bot.send_message(ADMIN_ID, admin_alert, parse_mode='Markdown')
-    except Exception:
-        pass
-
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(proxy_url)
     qr.make(fit=True)
@@ -464,11 +434,54 @@ def handle_user_history(call):
     else:
         page = int(call.data.split('_')[1])
         
-    history_text, markup = build_history_message(call.from_user.id, page=page)
+    uid = call.from_user.id
+    u_data = get_user_db(uid)
+    history_list = u_data['purchases']
     
+    if not history_list:
+        text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো প্রক্সি কেনেননি।"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    else:
+        items_per_page = 5
+        total_items = len(history_list)
+        total_pages = min((total_items + items_per_page - 1) // items_per_page, 5)
+        page = max(1, min(page, total_pages))
+
+        start_idx = (page - 1) * items_per_page
+        end_idx = start_idx + items_per_page
+        page_items = history_list[start_idx:end_idx]
+
+        text = f"📜 **PURCHASE HISTORY (Page {page}/{total_pages})**\n\n"
+        for item in page_items:
+            text += (
+                f"Date : {item['date']}\n"
+                f"Time : {item['time']}\n"
+                f"State : {item['state']}\n"
+                f"Quantity : {item['quantity']}   Cost : {item['cost']} TK\n"
+                f"----------------------------------------\n"
+            )
+
+        total_spend = sum(item['cost'] for item in history_list)
+        text += f"\nTotal Spend : {total_spend} TK"
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"historypage_{page}"))
+
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"historypage_{page - 1}"))
+        if page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"historypage_{page + 1}"))
+
+        if nav_buttons:
+            markup.row(*nav_buttons)
+
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+
     try:
         bot.edit_message_text(
-            history_text, 
+            text, 
             chat_id=call.message.chat.id, 
             message_id=call.message.message_id, 
             parse_mode='Markdown', 
@@ -491,9 +504,23 @@ def handle_admin_dashboard(message):
         "`/addbalance <user_id> <amount>` - Balance add & due entry\n"
         "`/paid <user_id> <YYYY-MM-DD> <amount>` - Clear/Adjust payment\n"
         "`/due <user_id>` - View user due query\n"
+        "`/history <user_id>` - View user purchase history\n"
         "`/adddue <user_id> <amount>` - Directly add due"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
+
+@bot.message_handler(commands=['history'])
+def handle_admin_history_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    try:
+        args = message.text.split()
+        target_user = int(args[1])
+        hist_text = build_history_message(target_user, page=1)
+        bot.send_message(message.chat.id, hist_text, parse_mode='Markdown')
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/history <user_id>`\nExample: `/history 5763930051`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['due'])
 def handle_admin_due_cmd(message):
