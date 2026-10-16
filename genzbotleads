@@ -391,8 +391,6 @@ def handle_buy_711_confirm(call):
     else:
         proxy_url = f"socks5://{ip_port_user_pass}"
 
-    # (এডমিনের বিরক্তিকর নোটিফিকেশন মেসেজটি এখান থেকে সম্পূর্ণ রিমুভ করে দেওয়া হয়েছে)
-
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(proxy_url)
     qr.make(fit=True)
