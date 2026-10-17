@@ -65,7 +65,8 @@ def parse_relative_time(created_val):
     
     val_str = str(created_val).strip()
     
-    if 'ago' in val_str.lower() or 'just now' in val_str.lower():
+    # যদি অলরেডি ফুল ফরম্যাটে থাকে
+    if any(w in val_str.lower() for w in ['second', 'minute', 'hour', 'day', 'ago', 'just now']):
         return val_str
 
     try:
@@ -88,13 +89,16 @@ def parse_relative_time(created_val):
             return "Just now"
 
         if seconds < 60:
-            return f"{seconds}s ago"
+            return f"{seconds} seconds ago" if seconds > 1 else "1 second ago"
         elif seconds < 3600:
-            return f"{seconds // 60}m ago"
+            m = seconds // 60
+            return f"{m} minutes ago" if m > 1 else "1 minute ago"
         elif seconds < 86400:
-            return f"{seconds // 3600}h ago"
+            h = seconds // 3600
+            return f"{h} hours ago" if h > 1 else "1 hour ago"
         else:
-            return f"{seconds // 86400}d ago"
+            d = seconds // 86400
+            return f"{d} days ago" if d > 1 else "1 day ago"
     except Exception as e:
         print(f"Time Parse Error: {e}")
         pass
@@ -331,7 +335,6 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
-    # স্ক্রিনশটের মতো নীল কালার (ব্যাকটিক্স) এবং মাঝখানে দাগ দিয়ে সাজানো হলো
     welcome_text = (
         f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
         f"📥 `Daily Earnings: {api_daily_earnings} TK`\n"
@@ -635,7 +638,7 @@ def build_lead_message(data):
     if not leads:
         return "🎯 No Live Leads Found!", None
 
-    message_text = f"Live Leads List (Page {current_page}/{last_page})\n\n"
+    message_text = f"🎯 Live Leads List (Page {current_page}/{last_page})\n\n"
     
     for lead in leads:
         name = str(lead.get('name', lead.get('user_id', 'N/A'))).replace('*', '')
