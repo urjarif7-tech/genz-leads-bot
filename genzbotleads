@@ -270,12 +270,12 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
-    # ফাকা স্পেস কমিয়ে একদম পাশাপাশি লাইনে রাখা হয়েছে
+    # টেক্সটগুলো কোড ব্লক (` `) দিয়ে ব্লু কালার করা হয়েছে এবং আগের মতো মাঝারি ফাঁকা রাখা হয়েছে
     welcome_text = (
         f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
-        f"Daily Earnings: {api_daily_earnings} TK\n"
-        f"Daily Spend: {daily_spend} TK\n"
-        f"Balance: {balance} TK"
+        f"`Daily Earnings: {api_daily_earnings} TK`\n"
+        f"`Daily Spend: {daily_spend} TK`\n"
+        f"`Balance: {balance} TK`"
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
