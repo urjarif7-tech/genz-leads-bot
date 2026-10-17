@@ -19,7 +19,7 @@ USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 # Cliproxy API Credentials
 CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
 
-# Trustsource API & Credentials (from official documentation)
+# Trustsource API & Credentials
 TRUSTSOURCE_API = "http://gen.trustsource.live/gen"
 TRUSTSOURCE_ZONE = "custom"
 TRUSTSOURCE_PTYPE = "2"
@@ -652,12 +652,44 @@ def handle_buy_711_confirm(call):
         return
 
     proxy_urls_list = []
-    # অপ্টিমাইজড সেশন লাইফটাইম (sessTime-10) এবং ফাস্ট রেসপন্সের জন্য http প্রোটোকল ফরম্যাট
-    for _ in range(quantity):
-        session_id = random.randint(100000, 999999)
-        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
-        proxy_url = f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}"
-        proxy_urls_list.append(proxy_url)
+    ip_details_list = []
+
+    try:
+        # Trustsource API কল করে সরাসরি Exit IP ও বিস্তারিত তথ্য নিয়ে আসা
+        api_url = f"{TRUSTSOURCE_API}?zone={TRUSTSOURCE_ZONE}&ptype={TRUSTSOURCE_PTYPE}&region=US&st={state_name}&count={quantity}&proto=http&stype=json"
+        res = requests.get(api_url, timeout=10)
+        
+        if res.status_code == 200:
+            res_data = res.json()
+            if res_data.get("code") == 200:
+                for item in res_data.get("data", []):
+                    ip = item.get("ip")
+                    port = item.get("port", TRUSTSOURCE_PORT)
+                    
+                    if ip:
+                        session_id = random.randint(100000, 999999)
+                        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
+                        proxy_url = f"http://{username}:{TRUSTSOURCE_PASSWORD}@{ip}:{port}"
+                        proxy_urls_list.append(proxy_url)
+                        
+                        # আইপির বিস্তারিত তথ্য ফেচ করা (ISP ও City)
+                        try:
+                            ip_info = requests.get(f"http://ipinfo.io/{ip}/json", timeout=3).json()
+                            isp = ip_info.get("org", "Unknown ISP")
+                            city = ip_info.get("city", state_name)
+                            ip_details_list.append(f"📍 Exit: {city}, {state_name} ({ip})\n📡 ISP: {isp}")
+                        except Exception:
+                            ip_details_list.append(f"📍 Exit: {state_name} ({ip})")
+    except Exception as e:
+        print(f"Trustsource API Error: {e}")
+
+    # যদি API থেকে ডাটা না আসে তবে ফলব্যাক ফরম্যাট
+    if not proxy_urls_list:
+        for _ in range(quantity):
+            session_id = random.randint(100000, 999999)
+            username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
+            proxy_urls_list.append(f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
+            ip_details_list.append(f"📍 Gateway: {TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -677,6 +709,7 @@ def handle_buy_711_confirm(call):
     save_user_db(uid, u_data)
 
     proxy_display_text = "\n".join(proxy_urls_list)
+    details_display_text = "\n".join(ip_details_list)
 
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(proxy_display_text)
@@ -688,9 +721,10 @@ def handle_buy_711_confirm(call):
     img_byte_arr.seek(0)
 
     caption = (
-        f"✅ **711 PROXY VERIFIED & CHARGED ({len(proxy_urls_list)}/{quantity})**\n\n"
+        f"✅ **PROXY VERIFIED & CHARGED ({len(proxy_urls_list)}/{quantity})**\n\n"
         f"💳 Charged: {cost} TK\n"
-        f"🚀 711 Proxy (States) ({state_name}, United States)\n"
+        f"🦊 {state_name}, United States\n"
+        f"{details_display_text}\n\n"
         f"📍 Proxy:\n`{proxy_display_text}`"
     )
 
