@@ -132,7 +132,6 @@ def get_user_db(telegram_id):
         result = execute_turso_query(stmt, [t_id])
         if result and result.get("rows"):
             row = result["rows"][0]
-            # parsing row values from HTTP API JSON structure
             val_balance = float(row[0].get("value", 0.0)) if row[0].get("value") is not None else 0.0
             val_spend = float(row[1].get("value", 0.0)) if row[1].get("value") is not None else 0.0
             val_due = float(row[2].get("value", 0.0)) if row[2].get("value") is not None else 0.0
@@ -220,7 +219,7 @@ def save_user_db(telegram_id, data):
         conn.commit()
         conn.close()
 
-# US States List for Cliproxy
+# US States List
 US_STATES = [
     "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
     "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", 
@@ -324,38 +323,6 @@ def build_lead_message(data):
     markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
     return message_text, markup
 
-def build_history_message(user_id, page=1):
-    uid = str(user_id)
-    u_data = get_user_db(uid)
-    history_list = u_data['purchases']
-    
-    if not history_list:
-        text = f"📜 **PURCHASE HISTORY (User ID: {uid})**\n\n❌ এই ইউজারের কোনো প্রক্সি কেনার ইতিহাস নেই।"
-        return text
-
-    items_per_page = 5
-    total_items = len(history_list)
-    total_pages = min((total_items + items_per_page - 1) // items_per_page, 5)
-    page = max(1, min(page, total_pages))
-
-    start_idx = (page - 1) * items_per_page
-    end_idx = start_idx + items_per_page
-    page_items = history_list[start_idx:end_idx]
-
-    text = f"📜 **PURCHASE HISTORY (User: {uid}) (Page {page}/{total_pages})**\n\n"
-    for item in page_items:
-        text += (
-            f"Date : {item.get('date', 'N/A')}\n"
-            f"Time : {item.get('time', 'N/A')}\n"
-            f"State : {item.get('state', 'N/A')}\n"
-            f"Quantity : {item.get('quantity', 1)}   Cost : {item.get('cost', 0)} TK\n"
-            f"----------------------------------------\n"
-        )
-
-    total_spend = sum(float(item.get('cost', 0.0)) for item in history_list)
-    text += f"\nTotal Spend : {total_spend} TK"
-    return text
-
 def generate_due_query_text(telegram_id):
     uid = str(telegram_id)
     u_data = get_user_db(uid)
@@ -443,22 +410,24 @@ def auto_refresh_loop():
                 except Exception:
                     pass
 
-# --- BUY PROXY FLOW ---
+# --- BUY PROXY FLOW (Providers Menu) ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_proxy')
 def handle_buy_proxy(call):
     text = "🌐 **BUY PROXY**\n\nChoose a provider:"
     markup = types.InlineKeyboardMarkup(row_width=1)
     
     btn_cliproxy = types.InlineKeyboardButton("🌐 Cliproxy (States)", callback_data="prov_cliproxy")
+    btn_711proxy = types.InlineKeyboardButton("🚀 711 Proxy (States)", callback_data="prov_711proxy")
     btn_back = types.InlineKeyboardButton("⬅️ Back", callback_data="go_welcome")
 
-    markup.add(btn_cliproxy, btn_back)
+    markup.add(btn_cliproxy, btn_711proxy, btn_back)
     try:
         bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
     except Exception:
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
+# --- CLIPROXY STATES MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_cliproxy')
 def handle_cliproxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -524,7 +493,6 @@ def handle_buy_clip_confirm(call):
         bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {cost} TK", show_alert=True)
         return
 
-    # Fetching Proxy from Cliproxy API and fixing format for Shadowrocket
     proxy_urls_list = []
     try:
         clip_api = f"https://webipapi.cliproxy.com/api/getIpInfo?key={CLIPROXY_KEY}&port=443&num={quantity}&country=US&state={state_name}&type=2"
@@ -563,7 +531,7 @@ def handle_buy_clip_confirm(call):
     purchase_log = {
         'date': bd_time.strftime("%d/%m/%Y"),
         'time': bd_time.strftime("%I:%M %p").lower(),
-        'state': state_name,
+        'state': f"Cliproxy ({state_name})",
         'quantity': quantity,
         'cost': cost
     }
@@ -609,6 +577,140 @@ def handle_buy_clip_confirm(call):
 
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
+
+
+# --- 🚀 711 PROXY (STATES) MENU ---
+@bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
+def handle_711proxy_states(call):
+    balance = get_effective_balance(call.from_user.id)
+
+    text = (
+        f"🚀 **711 PROXY (STATES)**\n\n"
+        f"💳 Balance: {balance} TK\n"
+        f"💰 Per successful request: 5.0 TK\n\n"
+        f"You're only charged if the proxy actually works — select a state:"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [types.InlineKeyboardButton(s, callback_data=f"state711_{s.lower()}") for s in US_STATES]
+    markup.add(*buttons)
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="menu_buy_proxy"))
+
+    try:
+        if call.message.content_type == 'photo':
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+        else:
+            bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('state711_'))
+def handle_711_quantity(call):
+    state_code = call.data.split('_')[1]
+    state_name = state_code.capitalize()
+    
+    balance = get_effective_balance(call.from_user.id)
+
+    text = (
+        f"🚀 **{state_name}, United States (711 Proxy)**\n\n"
+        f"💳 Balance: {balance} TK\n"
+        f"💰 5.0 TK per successful IP\n\n"
+        f"How many IPs do you want?"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    qty_buttons = [types.InlineKeyboardButton(f"{i}x", callback_data=f"buy_711_{state_code}_{i}") for i in range(1, 7)]
+    markup.add(*qty_buttons)
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="prov_711proxy"))
+
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('buy_711_'))
+def handle_buy_711_confirm(call):
+    parts = call.data.split('_')
+    state_code = parts[2].lower()
+    state_name = parts[2].capitalize()
+    quantity = int(parts[3])
+    cost = quantity * 5.0
+
+    balance = get_effective_balance(call.from_user.id)
+
+    if balance < cost:
+        bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {cost} TK", show_alert=True)
+        return
+
+    proxy_urls_list = []
+    for _ in range(quantity):
+        session_id = random.randint(100000, 999999)
+        username = f"leadsbot07-zone-custom-region-{state_code}-session-{session_id}"
+        password = "123456bot"
+        host = "global.rotip.711proxy.com"
+        port = "20000"
+        proxy_urls_list.append(f"http://{username}:{password}@{host}:{port}")
+
+    uid = str(call.from_user.id)
+    u_data = get_user_db(uid)
+    u_data['balance'] -= cost
+    u_data['spend'] += cost
+    u_data['due'] += cost
+
+    bd_time = datetime.utcnow() + timedelta(hours=6)
+    purchase_log = {
+        'date': bd_time.strftime("%d/%m/%Y"),
+        'time': bd_time.strftime("%I:%M %p").lower(),
+        'state': f"🚀 711 Proxy ({state_name})",
+        'quantity': quantity,
+        'cost': cost
+    }
+    u_data['purchases'].insert(0, purchase_log)
+    save_user_db(uid, u_data)
+
+    proxy_display_text = "\n".join(proxy_urls_list)
+
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(proxy_display_text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+
+    caption = (
+        f"✅ **711 PROXY VERIFIED & CHARGED ({len(proxy_urls_list)}/{quantity})**\n\n"
+        f"💳 Charged: {cost} TK\n"
+        f"🚀 711 Proxy (States) ({state_name}, United States)\n"
+        f"📍 Proxy:\n`{proxy_display_text}`"
+    )
+
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+        
+    bot.send_photo(call.message.chat.id, photo=img_byte_arr, caption=caption, parse_mode='Markdown')
+
+    remaining_balance = get_effective_balance(call.from_user.id)
+    summary_text = (
+        f"────────────────────────\n"
+        f"💳 Total Charged: {cost} TK\n\n"
+        f"Remaining Balance: {remaining_balance} TK"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn_states = types.InlineKeyboardButton("🚀 States", callback_data="prov_711proxy")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+    markup.add(btn_states, btn_back)
+
+    bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
 
 # --- USER DUE QUERY HANDLER ---
 @bot.callback_query_handler(func=lambda call: call.data == 'due_query')
@@ -657,7 +759,7 @@ def handle_user_history(call):
                 f"Date : {item.get('date', 'N/A')}\n"
                 f"Time : {item.get('time', 'N/A')}\n"
                 f"State : {item.get('state', 'N/A')}\n"
-                f"Quantity : {item.get('quantity', 1)}   Cost : {item.get('cost', 0)} TK\n"
+                f"Quantity : {item.get('quantity', 1)}    Cost : {item.get('cost', 0)} TK\n"
                 f"----------------------------------------\n"
             )
 
