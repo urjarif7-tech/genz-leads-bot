@@ -74,6 +74,8 @@ def parse_relative_time(created_val):
             dt = datetime.fromisoformat(clean_val)
             if dt.tzinfo is not None:
                 now = datetime.now(timezone.utc)
+                if dt.tzinfo != timezone.utc:
+                    dt = dt.astimezone(timezone.utc)
             else:
                 now = datetime.utcnow()
         else:
@@ -82,10 +84,6 @@ def parse_relative_time(created_val):
             
         diff = now - dt
         seconds = int(diff.total_seconds())
-
-        # Timezone offset adjustment for live leads display
-        if seconds > 21000 and seconds < 25200: 
-            seconds -= 21600
 
         if seconds < 0:
             return "Just now"
@@ -98,7 +96,8 @@ def parse_relative_time(created_val):
             return f"{seconds // 3600}h ago"
         else:
             return f"{seconds // 86400}d ago"
-    except Exception:
+    except Exception as e:
+        print(f"Time Parse Error: {e}")
         pass
 
     return val_str
