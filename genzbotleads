@@ -69,33 +69,24 @@ def parse_relative_time(created_val):
         return val_str
 
     try:
-        if 'T' in val_str:
-            clean_val = val_str.replace('Z', '+00:00')
-            dt = datetime.fromisoformat(clean_val)
-            if dt.tzinfo is not None:
-                now = datetime.now(timezone.utc)
-                if dt.tzinfo != timezone.utc:
-                    dt = dt.astimezone(timezone.utc)
+        if '-' in val_str and ':' in val_str:
+            dt = datetime.strptime(val_str.split('.')[0], "%Y-%m-%d %H:%M:%S")
+            now = datetime.utcnow() + timedelta(hours=6)
+            dt_local = dt + timedelta(hours=6)
+            diff = now - dt_local
+            seconds = int(diff.total_seconds())
+
+            if seconds < 0:
+                return "Just now"
+
+            if seconds < 60:
+                return f"{seconds}s ago"
+            elif seconds < 3600:
+                return f"{seconds // 60}m ago"
+            elif seconds < 86400:
+                return f"{seconds // 3600}h ago"
             else:
-                now = datetime.utcnow()
-        else:
-            dt = datetime.strptime(val_str, "%Y-%m-%d %H:%M:%S")
-            now = datetime.utcnow()
-            
-        diff = now - dt
-        seconds = int(diff.total_seconds())
-
-        if seconds < 0:
-            return "Just now"
-
-        if seconds < 60:
-            return f"{seconds}s ago"
-        elif seconds < 3600:
-            return f"{seconds // 60}m ago"
-        elif seconds < 86400:
-            return f"{seconds // 3600}h ago"
-        else:
-            return f"{seconds // 86400}d ago"
+                return f"{seconds // 86400}d ago"
     except Exception as e:
         print(f"Time Parse Error: {e}")
         pass
