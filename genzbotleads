@@ -334,12 +334,12 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
     btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
     btn_buy_number = types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
+    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
     btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
-    btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
     btn_due_query = types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
+    btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
     
     markup.add(btn_buy_proxy, btn_buy_number)
     markup.add(btn_leads, btn_request)
@@ -476,6 +476,7 @@ def handle_durian_get_numbers(call):
     price = SERVICES_PRICES.get(service_name, 10.0)
     total_cost = price * qty
 
+    # Balance Check only (No Deduction yet)
     balance = get_effective_balance(call.from_user.id)
     if balance < total_cost:
         bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {total_cost} TK", show_alert=True)
@@ -502,6 +503,7 @@ def handle_durian_get_numbers(call):
 
         sent_msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
         
+        # Start SMS Polling Loop
         threading.Thread(target=poll_durian_sms, args=(call.message.chat.id, sent_msg.message_id, num_str, order_id, service_name, price, country_code, call.from_user.id), daemon=True).start()
 
     bot.answer_callback_query(call.id)
@@ -511,6 +513,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
     sms_received = False
     sms_code = None
 
+    # Wait & Poll SMS for 2 minutes (120s)
     while time.time() - start_time < 120:
         time.sleep(5)
         try:
@@ -526,10 +529,23 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
             pass
 
     if sms_received:
+        # Deduct Balance ONLY when SMS Code is received
         uid = str(user_id)
         u_data = get_user_db(uid)
         u_data['balance'] -= price
         u_data['spend'] += price
+        u_data['due'] += price
+
+        # Purchase log for history
+        bd_time = datetime.utcnow() + timedelta(hours=6)
+        purchase_log = {
+            'date': bd_time.strftime("%d/%m/%Y"),
+            'time': bd_time.strftime("%I:%M %p").lower(),
+            'state': f"📱 {service_name} Number",
+            'quantity': 1,
+            'cost': price
+        }
+        u_data['purchases'].insert(0, purchase_log)
         save_user_db(uid, u_data)
 
         rem_bal = get_effective_balance(user_id)
@@ -553,6 +569,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         except Exception:
             pass
 
+        # Auto Block 1 minute after SMS received
         time.sleep(60)
         cancel_durian_number_api(order_id)
         text_blocked = f"🔒 Number `{num_str}` auto-blocked."
@@ -565,6 +582,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
             pass
 
     else:
+        # NO SMS Received -> Auto Block & NO Balance Deducted
         cancel_durian_number_api(order_id)
         text_noblock = (
             f"⏰ **No SMS for {num_str}.**\n"
@@ -1152,7 +1170,22 @@ def handle_admin_history_cmd(message):
     try:
         args = message.text.split()
         target_user = args[1]
-        hist_text = build_history_message(target_user, page=1)
+        
+        u_data = get_user_db(target_user)
+        history_list = u_data['purchases']
+        
+        if not history_list:
+            bot.send_message(message.chat.id, f"📜 User `{target_user}` has no purchase history.", parse_mode='Markdown')
+            return
+
+        hist_text = f"📜 **PURCHASE HISTORY FOR {target_user}**\n\n"
+        for item in history_list[:10]:
+            hist_text += (
+                f"Date : {item.get('date', 'N/A')}\n"
+                f"Item : {item.get('state', 'N/A')}\n"
+                f"Cost : {item.get('cost', 0)} TK\n"
+                f"----------------------------------------\n"
+            )
         bot.send_message(message.chat.id, hist_text, parse_mode='Markdown')
     except Exception:
         bot.reply_to(message, "⚠️ Usage: `/history <user_id>`\nExample: `/history 5763930051`", parse_mode='Markdown')
