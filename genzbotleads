@@ -70,7 +70,8 @@ def parse_relative_time(created_val):
 
     try:
         if 'T' in val_str:
-            dt = datetime.fromisoformat(val_str.replace('Z', '+00:00'))
+            clean_val = val_str.replace('Z', '+00:00')
+            dt = datetime.fromisoformat(clean_val)
             if dt.tzinfo is not None:
                 now = datetime.now(timezone.utc)
             else:
@@ -82,8 +83,12 @@ def parse_relative_time(created_val):
         diff = now - dt
         seconds = int(diff.total_seconds())
 
+        # Timezone offset adjustment for live leads display
+        if seconds > 21000 and seconds < 25200: 
+            seconds -= 21600
+
         if seconds < 0:
-            seconds = abs(seconds)
+            return "Just now"
 
         if seconds < 60:
             return f"{seconds}s ago"
@@ -476,7 +481,6 @@ def handle_durian_get_numbers(call):
     price = SERVICES_PRICES.get(service_name, 10.0)
     total_cost = price * qty
 
-    # Balance Check only (No Deduction yet)
     balance = get_effective_balance(call.from_user.id)
     if balance < total_cost:
         bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {total_cost} TK", show_alert=True)
@@ -503,7 +507,6 @@ def handle_durian_get_numbers(call):
 
         sent_msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
         
-        # Start SMS Polling Loop
         threading.Thread(target=poll_durian_sms, args=(call.message.chat.id, sent_msg.message_id, num_str, order_id, service_name, price, country_code, call.from_user.id), daemon=True).start()
 
     bot.answer_callback_query(call.id)
@@ -513,7 +516,6 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
     sms_received = False
     sms_code = None
 
-    # Wait & Poll SMS for 2 minutes (120s)
     while time.time() - start_time < 120:
         time.sleep(5)
         try:
@@ -529,14 +531,12 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
             pass
 
     if sms_received:
-        # Deduct Balance ONLY when SMS Code is received
         uid = str(user_id)
         u_data = get_user_db(uid)
         u_data['balance'] -= price
         u_data['spend'] += price
         u_data['due'] += price
 
-        # Purchase log for history
         bd_time = datetime.utcnow() + timedelta(hours=6)
         purchase_log = {
             'date': bd_time.strftime("%d/%m/%Y"),
@@ -569,7 +569,6 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         except Exception:
             pass
 
-        # Auto Block 1 minute after SMS received
         time.sleep(60)
         cancel_durian_number_api(order_id)
         text_blocked = f"🔒 Number `{num_str}` auto-blocked."
@@ -582,7 +581,6 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
             pass
 
     else:
-        # NO SMS Received -> Auto Block & NO Balance Deducted
         cancel_durian_number_api(order_id)
         text_noblock = (
             f"⏰ **No SMS for {num_str}.**\n"
