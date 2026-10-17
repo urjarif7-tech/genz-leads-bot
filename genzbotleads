@@ -6,7 +6,7 @@ import json
 import random
 import requests
 import qrcode
-import libsql_experimental as libsql
+import libsql_client
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -35,37 +35,58 @@ admin_states = {}
 # --- Turso Cloud Database Connection ---
 def get_db_connection():
     if TURSO_URL and TURSO_TOKEN:
-        return libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
+        return libsql_client.create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
     else:
-        # Local Fallback
-        return libsql.connect("bot_database.db")
+        # Local Fallback using standard sqlite3 if cloud credentials are missing
+        import sqlite3
+        return sqlite3.connect("bot_database.db")
 
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id TEXT PRIMARY KEY,
-            balance REAL DEFAULT 0.0,
-            spend REAL DEFAULT 0.0,
-            due REAL DEFAULT 0.0,
-            paid REAL DEFAULT 0.0,
-            purchases TEXT DEFAULT '[]',
-            due_logs TEXT DEFAULT '[]'
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    client = get_db_connection()
+    if TURSO_URL and TURSO_TOKEN:
+        client.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id TEXT PRIMARY KEY,
+                balance REAL DEFAULT 0.0,
+                spend REAL DEFAULT 0.0,
+                due REAL DEFAULT 0.0,
+                paid REAL DEFAULT 0.0,
+                purchases TEXT DEFAULT '[]',
+                due_logs TEXT DEFAULT '[]'
+            )
+        ''')
+        client.close()
+    else:
+        cursor = client.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id TEXT PRIMARY KEY,
+                balance REAL DEFAULT 0.0,
+                spend REAL DEFAULT 0.0,
+                due REAL DEFAULT 0.0,
+                paid REAL DEFAULT 0.0,
+                purchases TEXT DEFAULT '[]',
+                due_logs TEXT DEFAULT '[]'
+            )
+        ''')
+        client.commit()
+        client.close()
 
 init_db()
 
 def get_user_db(telegram_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    client = get_db_connection()
     t_id = str(telegram_id).strip()
-    cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
-    row = cursor.fetchone()
-    conn.close()
+    
+    if TURSO_URL and TURSO_TOKEN:
+        rs = client.execute("SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?", [t_id])
+        row = rs.rows[0] if rs.rows else None
+        client.close()
+    else:
+        cursor = client.cursor()
+        cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
+        row = cursor.fetchone()
+        client.close()
 
     if row:
         try:
@@ -96,13 +117,10 @@ def get_user_db(telegram_id):
         }
 
 def save_user_db(telegram_id, data):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    client = get_db_connection()
     t_id = str(telegram_id).strip()
-    cursor.execute('''
-        INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (
+    
+    params = [
         t_id,
         float(data.get('balance', 0.0)),
         float(data.get('spend', 0.0)),
@@ -110,9 +128,22 @@ def save_user_db(telegram_id, data):
         float(data.get('paid', 0.0)),
         json.dumps(data.get('purchases', [])),
         json.dumps(data.get('due_logs', []))
-    ))
-    conn.commit()
-    conn.close()
+    ]
+
+    if TURSO_URL and TURSO_TOKEN:
+        client.execute('''
+            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', params)
+        client.close()
+    else:
+        cursor = client.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', params)
+        client.commit()
+        client.close()
 
 # US States List for Cliproxy
 US_STATES = [
@@ -774,7 +805,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
@@ -838,7 +869,7 @@ def handle_pagination(call):
 
 @app.route('/')
 def home():
-    return "Telegram Bot Server is Running with Turso Database!"
+    return "Telegram Bot Server is Running with Turso Cloud Database!"
 
 if __name__ == '__main__':
     threading.Thread(target=auto_refresh_loop, daemon=True).start()
