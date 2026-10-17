@@ -69,24 +69,32 @@ def parse_relative_time(created_val):
         return val_str
 
     try:
-        if '-' in val_str and ':' in val_str:
+        dt = None
+        for fmt in ("%d %b %Y, %I:%M %p", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                dt = datetime.strptime(val_str, fmt)
+                break
+            except ValueError:
+                continue
+
+        if not dt:
             dt = datetime.strptime(val_str.split('.')[0], "%Y-%m-%d %H:%M:%S")
-            now = datetime.utcnow() + timedelta(hours=6)
-            dt_local = dt + timedelta(hours=6)
-            diff = now - dt_local
-            seconds = int(diff.total_seconds())
 
-            if seconds < 0:
-                return "Just now"
+        now = datetime.utcnow() + timedelta(hours=6)
+        diff = now - dt
+        seconds = int(diff.total_seconds())
 
-            if seconds < 60:
-                return f"{seconds}s ago"
-            elif seconds < 3600:
-                return f"{seconds // 60}m ago"
-            elif seconds < 86400:
-                return f"{seconds // 3600}h ago"
-            else:
-                return f"{seconds // 86400}d ago"
+        if seconds < 0:
+            return "Just now"
+
+        if seconds < 60:
+            return f"{seconds}s ago"
+        elif seconds < 3600:
+            return f"{seconds // 60}m ago"
+        elif seconds < 86400:
+            return f"{seconds // 3600}h ago"
+        else:
+            return f"{seconds // 86400}d ago"
     except Exception as e:
         print(f"Time Parse Error: {e}")
         pass
@@ -633,7 +641,6 @@ def build_lead_message(data):
         offer = str(lead.get('offer_name', 'N/A')).replace('*', '')
         reward = str(lead.get('points', '0')).replace('*', '')
         
-        # Relative time format (যেমন: 3h ago, 10m ago) ব্যবহারের জন্য parse_relative_time কল করা হলো
         raw_time = lead.get('time_ago', 'N/A')
         time_ago = parse_relative_time(raw_time)
 
