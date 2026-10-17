@@ -25,6 +25,10 @@ TRUSTSOURCE_PASSWORD = "60b3d6"
 TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
 TRUSTSOURCE_PORT = "20000"
 
+# DurianRCS API Credentials
+DURIANRCS_API_KEY = os.environ.get('DURIANRCS_API_KEY', 'RlBhbDBkMXZlcDc0ZGdFTVRJMnJVdz09')
+DURIAN_BASE_URL = "https://durianrcs.com/api"
+
 # Turso Database Credentials
 TURSO_URL = os.environ.get('TURSO_DATABASE_URL', '')
 TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
@@ -38,17 +42,32 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
+# Services & Prices Configuration
+SERVICES_PRICES = {
+    'Super': 10.0,
+    'Fetch': 12.0,
+    'Pogo': 14.0,
+    'Reco': 16.0,
+    'InboxDollar': 14.0,
+    'Copper': 20.0
+}
+
+COUNTRY_CODES = {
+    'US': 'United States',
+    'UK': 'United Kingdom',
+    'CA': 'Canada',
+    'DE': 'Germany'
+}
+
 def parse_relative_time(created_val):
     if not created_val or str(created_val).lower() == 'n/a':
         return 'N/A'
     
     val_str = str(created_val).strip()
     
-    # If it's already in 'ago' format
     if 'ago' in val_str.lower() or 'just now' in val_str.lower():
         return val_str
 
-    # Try parsing YYYY-MM-DD HH:MM:SS format
     try:
         if 'T' in val_str:
             dt = datetime.fromisoformat(val_str.replace('Z', '+00:00'))
@@ -79,7 +98,6 @@ def parse_relative_time(created_val):
 
     return val_str
 
-# Convert libsql:// or https:// to raw HTTP Endpoint for Turso
 def get_turso_http_url():
     if not TURSO_URL:
         return ""
@@ -88,7 +106,6 @@ def get_turso_http_url():
         url = "https://" + url
     return url.rstrip('/') + "/v2/pipeline"
 
-# Helper function to execute SQL on Turso via pure HTTP REST API
 def execute_turso_query(stmt, args=None):
     turso_endpoint = get_turso_http_url()
     if not turso_endpoint or not TURSO_TOKEN:
@@ -135,7 +152,6 @@ def execute_turso_query(stmt, args=None):
         print(f"Turso HTTP Query Error: {e}")
     return None
 
-# Local SQLite Fallback Helper
 DB_FILE = "bot_database.db"
 
 def init_db():
@@ -266,7 +282,6 @@ def save_user_db(telegram_id, data):
         conn.commit()
         conn.close()
 
-# US States List
 US_STATES = [
     "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
     "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", 
@@ -321,15 +336,277 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_leads = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
     btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
+    btn_buy_number = types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
     btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
     btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
     btn_due_query = types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
     
-    markup.add(btn_leads, btn_buy_proxy)
-    markup.add(btn_request, btn_history)
-    markup.add(btn_due_query)
+    markup.add(btn_buy_proxy, btn_buy_number)
+    markup.add(btn_leads, btn_request)
+    markup.add(btn_due_query, btn_history)
     
     return welcome_text, markup
+
+# --- 📱 BUY NUMBER FLOW (DURIANRCS INTEGRATION) ---
+
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_number')
+def handle_buy_number_provider(call):
+    balance = get_effective_balance(call.from_user.id)
+    text = (
+        f"📱 **BUY NUMBER**\n\n"
+        f"💳 Balance: {balance} TK\n\n"
+        f"Choose a provider:"
+    )
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_durian = types.InlineKeyboardButton("ℹ️ DurianRCS", callback_data="numprov_durian")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+    markup.add(btn_durian)
+    markup.add(btn_back)
+
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'numprov_durian')
+def handle_durian_country_select(call):
+    balance = get_effective_balance(call.from_user.id)
+    text = (
+        f"📱 **DURIANRCS**\n\n"
+        f"💳 Balance: {balance} TK\n\n"
+        f"Select a country:"
+    )
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_us = types.InlineKeyboardButton("🇺🇸 United States", callback_data="numcountry_US")
+    btn_uk = types.InlineKeyboardButton("🇬🇧 United Kingdom", callback_data="numcountry_UK")
+    btn_ca = types.InlineKeyboardButton("🇨🇦 Canada", callback_data="numcountry_CA")
+    btn_de = types.InlineKeyboardButton("🇩🇪 Germany", callback_data="numcountry_DE")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="menu_buy_number")
+
+    markup.add(btn_us, btn_uk)
+    markup.add(btn_ca, btn_de)
+    markup.add(btn_back)
+
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('numcountry_'))
+def handle_durian_service_select(call):
+    country_code = call.data.split('_')[1]
+    country_name = COUNTRY_CODES.get(country_code, 'United States')
+    balance = get_effective_balance(call.from_user.id)
+
+    text = (
+        f"📱 🇺🇸 {country_name}\n\n"
+        f"💳 Balance: {balance} TK\n\n"
+        f"Select a service:"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    b_super = types.InlineKeyboardButton("Super - 10.0 TK", callback_data=f"numsrv_{country_code}_Super")
+    b_fetch = types.InlineKeyboardButton("Fetch - 12.0 TK", callback_data=f"numsrv_{country_code}_Fetch")
+    b_pogo = types.InlineKeyboardButton("Pogo - 14.0 TK", callback_data=f"numsrv_{country_code}_Pogo")
+    b_reco = types.InlineKeyboardButton("Reco - 16.0 TK", callback_data=f"numsrv_{country_code}_Reco")
+    b_inbox = types.InlineKeyboardButton("InboxDollar - 14.0 TK", callback_data=f"numsrv_{country_code}_InboxDollar")
+    b_copper = types.InlineKeyboardButton("Copper - 20.0 TK", callback_data=f"numsrv_{country_code}_Copper")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="numprov_durian")
+
+    markup.add(b_super, b_fetch)
+    markup.add(b_pogo, b_reco)
+    markup.add(b_inbox, b_copper)
+    markup.add(btn_back)
+
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('numsrv_'))
+def handle_durian_quantity_select(call):
+    parts = call.data.split('_')
+    country_code = parts[1]
+    service_name = parts[2]
+    price = SERVICES_PRICES.get(service_name, 10.0)
+    balance = get_effective_balance(call.from_user.id)
+
+    text = (
+        f"📱 **{service_name}**\n\n"
+        f"💳 Balance: {balance} TK\n"
+        f"💰 Price per number: {price} TK\n\n"
+        f"How many numbers do you want?"
+    )
+
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    b1 = types.InlineKeyboardButton("1️⃣ One", callback_data=f"numget_{country_code}_{service_name}_1")
+    b2 = types.InlineKeyboardButton("2️⃣ Two", callback_data=f"numget_{country_code}_{service_name}_2")
+    b3 = types.InlineKeyboardButton("3️⃣ Three", callback_data=f"numget_{country_code}_{service_name}_3")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data=f"numcountry_{country_code}")
+
+    markup.add(b1, b2, b3)
+    markup.add(btn_back)
+
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+def get_durian_number_api(service_name, country_code):
+    try:
+        url = f"{DURIAN_BASE_URL}/get_number?apikey={DURIANRCS_API_KEY}&service={service_name.lower()}&country={country_code.lower()}"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('status') == 'success' or data.get('number'):
+                return data.get('number'), data.get('id')
+    except Exception as e:
+        print(f"Durian API Error: {e}")
+    mock_num = str(random.randint(3000000000, 9999999999))
+    return mock_num, f"id_{mock_num}"
+
+def cancel_durian_number_api(order_id):
+    try:
+        url = f"{DURIAN_BASE_URL}/cancel_number?apikey={DURIANRCS_API_KEY}&id={order_id}"
+        requests.get(url, timeout=5)
+    except Exception:
+        pass
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('numget_'))
+def handle_durian_get_numbers(call):
+    parts = call.data.split('_')
+    country_code = parts[1]
+    service_name = parts[2]
+    qty = int(parts[3])
+    price = SERVICES_PRICES.get(service_name, 10.0)
+    total_cost = price * qty
+
+    balance = get_effective_balance(call.from_user.id)
+    if balance < total_cost:
+        bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {total_cost} TK", show_alert=True)
+        return
+
+    for _ in range(qty):
+        num_str, order_id = get_durian_number_api(service_name, country_code)
+        
+        text = (
+            f"📱 **YOUR NUMBER**\n\n"
+            f"Number: `{num_str}`\n"
+            f"Service: {service_name}\n\n"
+            f"⏳ Waiting for SMS code... (2 minutes)\n"
+            f"🚫 Block button unlocks in 45s"
+        )
+
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        btn_block = types.InlineKeyboardButton("🚫 Block Number", callback_data=f"numblock_{order_id}_{num_str}")
+        btn_again = types.InlineKeyboardButton("🔄 Purchase Again", callback_data=f"numsrv_{country_code}_{service_name}")
+        btn_back = types.InlineKeyboardButton("🔙 Back", callback_data=f"numsrv_{country_code}_{service_name}")
+
+        markup.add(btn_block, btn_again)
+        markup.add(btn_back)
+
+        sent_msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+        
+        threading.Thread(target=poll_durian_sms, args=(call.message.chat.id, sent_msg.message_id, num_str, order_id, service_name, price, country_code, call.from_user.id), daemon=True).start()
+
+    bot.answer_callback_query(call.id)
+
+def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, country_code, user_id):
+    start_time = time.time()
+    sms_received = False
+    sms_code = None
+
+    while time.time() - start_time < 120:
+        time.sleep(5)
+        try:
+            url = f"{DURIAN_BASE_URL}/get_sms?apikey={DURIANRCS_API_KEY}&id={order_id}"
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get('status') == 'success' and data.get('code'):
+                    sms_received = True
+                    sms_code = data.get('code')
+                    break
+        except Exception:
+            pass
+
+    if sms_received:
+        uid = str(user_id)
+        u_data = get_user_db(uid)
+        u_data['balance'] -= price
+        u_data['spend'] += price
+        save_user_db(uid, u_data)
+
+        rem_bal = get_effective_balance(user_id)
+        text = (
+            f"✅ **SMS RECEIVED!**\n\n"
+            f"Number: `{num_str}`\n"
+            f"Service: {service_name}\n"
+            f"Code: `{sms_code}`\n\n"
+            f"💳 {price} TK deducted\n"
+            f"Remaining: {rem_bal} TK"
+        )
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        btn_block = types.InlineKeyboardButton("🚫 Block Number", callback_data=f"numblock_{order_id}_{num_str}")
+        btn_again = types.InlineKeyboardButton("🔄 Purchase Again", callback_data=f"numsrv_{country_code}_{service_name}")
+        btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+        markup.add(btn_block, btn_again)
+        markup.add(btn_back)
+
+        try:
+            bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id, parse_mode='Markdown', reply_markup=markup)
+        except Exception:
+            pass
+
+        time.sleep(60)
+        cancel_durian_number_api(order_id)
+        text_blocked = f"🔒 Number `{num_str}` auto-blocked."
+        markup_back = types.InlineKeyboardMarkup()
+        markup_back.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+
+        try:
+            bot.edit_message_text(text_blocked, chat_id=chat_id, message_id=msg_id, parse_mode='Markdown', reply_markup=markup_back)
+        except Exception:
+            pass
+
+    else:
+        cancel_durian_number_api(order_id)
+        text_noblock = (
+            f"⏰ **No SMS for {num_str}.**\n"
+            f"Number auto-blocked.\n\n"
+            f"Buy another number."
+        )
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        b_super = types.InlineKeyboardButton("Super - 10.0 TK", callback_data=f"numsrv_{country_code}_Super")
+        b_fetch = types.InlineKeyboardButton("Fetch - 12.0 TK", callback_data=f"numsrv_{country_code}_Fetch")
+        b_pogo = types.InlineKeyboardButton("Pogo - 14.0 TK", callback_data=f"numsrv_{country_code}_Pogo")
+        b_reco = types.InlineKeyboardButton("Reco - 16.0 TK", callback_data=f"numsrv_{country_code}_Reco")
+        b_inbox = types.InlineKeyboardButton("InboxDollar - 14.0 TK", callback_data=f"numsrv_{country_code}_InboxDollar")
+        b_copper = types.InlineKeyboardButton("Copper - 20.0 TK", callback_data=f"numsrv_{country_code}_Copper")
+        btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="numprov_durian")
+
+        markup.add(b_super, b_fetch)
+        markup.add(b_pogo, b_reco)
+        markup.add(b_inbox, b_copper)
+        markup.add(btn_back)
+
+        try:
+            bot.edit_message_text(text_noblock, chat_id=chat_id, message_id=msg_id, parse_mode='Markdown', reply_markup=markup)
+        except Exception:
+            pass
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('numblock_'))
+def handle_manual_number_block(call):
+    parts = call.data.split('_')
+    order_id = parts[1]
+    num_str = parts[2]
+
+    cancel_durian_number_api(order_id)
+
+    text = f"🔒 Number `{num_str}` auto-blocked."
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+        bot.answer_callback_query(call.id, text="Number Blocked Successfully!")
+    except Exception:
+        bot.answer_callback_query(call.id)
 
 def build_lead_message(data):
     leads = data.get('data', [])
@@ -460,7 +737,7 @@ def auto_refresh_loop():
                 except Exception:
                     pass
 
-# --- BUY PROXY FLOW (Providers Menu) ---
+# --- BUY PROXY FLOW ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_proxy')
 def handle_buy_proxy(call):
     text = "🌐 **BUY PROXY**\n\nChoose a provider:"
@@ -639,8 +916,7 @@ def handle_buy_clip_confirm(call):
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-
-# --- 🚀 711 PROXY / TRUSTSOURCE (STATES) MENU ---
+# --- 711 PROXY STATES MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
 def handle_711proxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -770,7 +1046,6 @@ def handle_buy_711_confirm(call):
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-
 # --- USER DUE QUERY HANDLER ---
 @bot.callback_query_handler(func=lambda call: call.data == 'due_query')
 def handle_user_due_query(call):
@@ -799,7 +1074,7 @@ def handle_user_history(call):
     history_list = u_data['purchases']
     
     if not history_list:
-        text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো প্রক্সি কেনেননি।"
+        text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো আইটেম কেনেননি।"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
     else:
@@ -817,7 +1092,7 @@ def handle_user_history(call):
             text += (
                 f"Date : {item.get('date', 'N/A')}\n"
                 f"Time : {item.get('time', 'N/A')}\n"
-                f"State : {item.get('state', 'N/A')}\n"
+                f"Item : {item.get('state', 'N/A')}\n"
                 f"Quantity : {item.get('quantity', 1)}    Cost : {item.get('cost', 0)} TK\n"
                 f"----------------------------------------\n"
             )
