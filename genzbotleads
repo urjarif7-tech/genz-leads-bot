@@ -65,7 +65,6 @@ def parse_relative_time(created_val):
     
     val_str = str(created_val).strip()
     
-    # যদি অলরেডি ফুল ফরম্যাটে থাকে
     if any(w in val_str.lower() for w in ['second', 'minute', 'hour', 'day', 'ago', 'just now']):
         return val_str
 
@@ -1355,9 +1354,14 @@ def process_request_amount(message):
     
     bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
+    # পূর্ণ নাম (First Name + Last Name) বের করার কোড
+    first_name = message.from_user.first_name or ""
+    last_name = message.from_user.last_name or ""
+    full_name = f"{first_name} {last_name}".strip() or "Unknown"
+
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
-        f"👤 Name: {message.from_user.first_name}\n"
+        f"👤 Name: {full_name}\n"
         f"🆔 ID: `{message.from_user.id}`\n"
         f"💵 Requested Amount: `{amount} TK`"
     )
