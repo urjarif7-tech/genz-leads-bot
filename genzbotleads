@@ -293,6 +293,8 @@ def fetch_leads(page=1):
         response = requests.get(f"{API_URL}?page={page}", timeout=10)
         if response.status_code == 200:
             return response.json()
+        else:
+            print(f"API Error Response: {response.status_code}")
     except Exception as e:
         print(f"Error fetching leads: {e}")
     return None
@@ -1378,10 +1380,14 @@ def handle_back_to_welcome(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
 def handle_pagination(call):
-    page = int(call.data.split('_')[1])
+    try:
+        page = int(call.data.split('_')[1])
+    except Exception:
+        page = 1
+
     data = fetch_leads(page=page)
     
-    if data:
+    if data and data.get('data'):
         msg_text, markup = build_lead_message(data)
         try:
             bot.edit_message_text(
@@ -1398,7 +1404,7 @@ def handle_pagination(call):
         except Exception:
             bot.answer_callback_query(call.id)
     else:
-        bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id, text="⚠️ No live leads available or API connection error!", show_alert=True)
 
 @app.route('/')
 def home():
