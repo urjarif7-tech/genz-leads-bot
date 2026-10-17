@@ -19,6 +19,12 @@ USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 # Cliproxy API Credentials
 CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
 
+# Trustsource Proxy Credentials
+TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
+TRUSTSOURCE_PORT = "20000"
+TRUSTSOURCE_USERNAME = "USER702036"
+TRUSTSOURCE_PASSWORD = "60b3d6"
+
 # Turso Database Credentials
 TURSO_URL = os.environ.get('TURSO_DATABASE_URL', '')
 TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
@@ -515,11 +521,11 @@ def handle_buy_clip_confirm(call):
     if not proxy_urls_list:
         for _ in range(quantity):
             session_id = random.randint(100000, 999999)
-            username = f"leadsbot07-zone-custom-region-{state_code}-session-{session_id}"
-            password = "123456bot"
-            host = "global.rotip.711proxy.com"
-            port = "20000"
-            proxy_urls_list.append(f"http://{username}:{password}@{host}:{port}")
+            username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-{state_code}-session-{session_id}"
+            password = TRUSTSOURCE_PASSWORD
+            host = TRUSTSOURCE_HOST
+            port = TRUSTSOURCE_PORT
+            proxy_urls_list.append(f"socks5://{username}:{password}@{host}:{port}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -648,11 +654,11 @@ def handle_buy_711_confirm(call):
     proxy_urls_list = []
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
-        username = f"leadsbot07-zone-custom-region-{state_code}-session-{session_id}"
-        password = "123456bot"
-        host = "global.rotip.711proxy.com"
-        port = "20000"
-        proxy_urls_list.append(f"http://{username}:{password}@{host}:{port}")
+        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-{state_code}-session-{session_id}"
+        password = TRUSTSOURCE_PASSWORD
+        host = TRUSTSOURCE_HOST
+        port = TRUSTSOURCE_PORT
+        proxy_urls_list.append(f"socks5://{username}:{password}@{host}:{port}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -982,7 +988,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
