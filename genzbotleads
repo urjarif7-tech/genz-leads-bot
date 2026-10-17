@@ -338,7 +338,7 @@ def generate_due_query_text(telegram_id):
     logs = u_data['due_logs']
 
     if not logs:
-        text = "📋 **DUE QUERY**\n\n❌ Apnar kono balance ad ba Due record nei."
+        text = "📋 **DUE QUERY**\n\n❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
         return text, markup
@@ -524,8 +524,8 @@ def handle_buy_clip_confirm(call):
     if not proxy_urls_list:
         for _ in range(quantity):
             session_id = random.randint(100000, 999999)
-            username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}"
-            proxy_urls_list.append(f"socks5://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
+            username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
+            proxy_urls_list.append(f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -652,11 +652,11 @@ def handle_buy_711_confirm(call):
         return
 
     proxy_urls_list = []
-    # প্যানেলের সঠিক ফরম্যাট অনুযায়ী (region-US-st-[State]) সরাসরি জেনারেট করা যাতে টাইমআউট না হয়
+    # অপ্টিমাইজড সেশন লাইফটাইম (sessTime-10) এবং ফাস্ট রেসপন্সের জন্য http প্রোটোকল ফরম্যাট
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
-        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}"
-        proxy_url = f"socks5://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}"
+        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
+        proxy_url = f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}"
         proxy_urls_list.append(proxy_url)
 
     uid = str(call.from_user.id)
@@ -745,7 +745,7 @@ def handle_user_history(call):
     history_list = u_data['purchases']
     
     if not history_list:
-        text = "📜 **PURCHASE HISTORY**\n\n❌ Apni ekhono kono proxy kenenni."
+        text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো প্রক্সি কেনেননি।"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
     else:
