@@ -331,11 +331,16 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
+    # স্ক্রিনশটের মতো ড্যাশ বা দাগ দিয়ে সাজানো হলো
     welcome_text = (
         f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
-        f"`Daily Earnings: {api_daily_earnings} TK`\n"
-        f"`Daily Spend: {daily_spend} TK`\n"
-        f"`Balance: {balance} TK`"
+        f"```text\n"
+        f"Daily Earnings: {api_daily_earnings} TK\n"
+        f"------------------------\n"
+        f"Daily Spend: {daily_spend} TK\n"
+        f"------------------------\n"
+        f"Balance: {balance} TK\n"
+        f"```"
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -1347,7 +1352,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
