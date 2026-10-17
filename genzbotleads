@@ -632,17 +632,14 @@ def build_lead_message(data):
         provider = str(lead.get('provider', 'N/A')).replace('*', '')
         offer = str(lead.get('offer_name', 'N/A')).replace('*', '')
         reward = str(lead.get('points', '0')).replace('*', '')
-        time_ago = str(lead.get('time_ago', 'Just now')).replace('*', '')
-        
-        # ব্যাকএন্ড থেকে আসা ইউজার জয়েনিং টাইম (created_time_ago) ব্যবহার করা হচ্ছে
-        created_time_ago = str(lead.get('created_time_ago', 'Just now')).replace('*', '')
+        time_ago = str(lead.get('time_ago', 'N/A')).replace('*', '')
 
         message_text += f"Name : {name}\n"
         message_text += f"Email : {email}\n"
         message_text += f"Provider : {provider}\n"
         message_text += f"Offer : {offer}\n"
         message_text += f"Reward : {reward} Point\n"
-        message_text += f"Time : {time_ago}      Created : {created_time_ago}\n\n"
+        message_text += f"Time : {time_ago}\n\n"
 
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
@@ -1204,7 +1201,7 @@ def handle_admin_paid_cmd(message):
         target_user = args[1]
         target_date = args[2]
         pay_amount = float(args[3])
-
+        
         u_data = get_user_db(target_user)
         logs = u_data['due_logs']
         if not logs:
