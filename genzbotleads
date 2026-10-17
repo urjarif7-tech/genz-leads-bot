@@ -19,7 +19,7 @@ USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 # Cliproxy API Credentials
 CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
 
-# Trustsource API & Credentials (711 Proxy - untouched & safe)
+# Trustsource API & Credentials (711 Proxy)
 TRUSTSOURCE_USERNAME = "USER702036"
 TRUSTSOURCE_PASSWORD = "60b3d6"
 TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
@@ -270,15 +270,12 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
-    # Nexlabs এর মতো ফাঁকা ফাঁকা এবং আন্ডারলাইন স্টাইল
+    # কাস্টমাইজড টাইটেল, দাগ ছাড়া ফাঁকা স্পেস এবং ক্লিক মেসেজ রিমুভ করা হয়েছে
     welcome_text = (
-        f"👋 **Welcome {user_first_name} To Nex - Labs**\n\n"
-        f"Daily Earnings: {api_daily_earnings} TK\n"
-        f"────────────────────\n"
-        f"Daily Spend: {daily_spend} TK\n"
-        f"────────────────────\n"
-        f"Balance: {balance} TK\n\n"
-        f"Click the button below to view live leads or buy proxy."
+        f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
+        f"Daily Earnings: {api_daily_earnings} TK\n\n"
+        f"Daily Spend: {daily_spend} TK\n\n"
+        f"Balance: {balance} TK"
     )
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -337,7 +334,6 @@ def generate_due_query_text(telegram_id):
     u_data = get_user_db(uid)
     logs = u_data['due_logs']
 
-    # ডিউ কোয়ারির একেবারে উপরে NexLab এর মতো YOUR DUE SUMMARY
     text = "📋 **YOUR DUE SUMMARY**\n-------------------------\n"
 
     if not logs:
@@ -520,7 +516,6 @@ def handle_buy_clip_confirm(call):
                         formatted_proxy = f"http://{username}:{password}@{host}:{port}"
                         proxy_urls_list.append(formatted_proxy)
                         
-                        # Fetch ISP and Exit details like Nexlab
                         try:
                             ip_info = requests.get(f"http://ipinfo.io/{host}/json", timeout=3).json()
                             isp = ip_info.get("org", "Unknown ISP")
@@ -570,7 +565,6 @@ def handle_buy_clip_confirm(call):
     img.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
 
-    # Proxy: লিঙ্ক রিমুভ করে নেক্সল্যাবের মতো ISP ও Exit দেখানো হয়েছে
     caption = (
         f"✅ **PROXY VERIFIED & CHARGED ({len(proxy_urls_list)}/{quantity})**\n\n"
         f"💳 Charged: {cost} TK\n"
@@ -594,7 +588,6 @@ def handle_buy_clip_confirm(call):
     )
 
     markup = types.InlineKeyboardMarkup(row_width=1)
-    # ফক্স ইমোজির বদলে ইমেজ 🖼️ ইমোজি ব্যবহার করা হয়েছে
     btn_states = types.InlineKeyboardButton("🖼️ States", callback_data="prov_cliproxy")
     btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
     markup.add(btn_states, btn_back)
@@ -670,7 +663,6 @@ def handle_buy_711_confirm(call):
         return
 
     proxy_urls_list = []
-    # 711 প্রক্সির আসল এবং সঠিক কনফিগারেশন সম্পূর্ণ অক্ষুণ্ণ রাখা হয়েছে যাতে কোনো সমস্যা না হয়
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
         username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
