@@ -632,8 +632,8 @@ def build_lead_message(data):
         reward = str(lead.get('points', '0')).replace('*', '')
         time_ago = str(lead.get('time_ago', 'Just now')).replace('*', '')
         
-        raw_created_at = lead.get('created_at', 'N/A')
-        created_time_ago = parse_relative_time(raw_created_at)
+        # ব্যাকএন্ড থেকে আসা ইউজার জয়েনিং টাইম (created_time_ago) ব্যবহার করা হচ্ছে
+        created_time_ago = str(lead.get('created_time_ago', 'Just now')).replace('*', '')
 
         message_text += f"Name : {name}\n"
         message_text += f"Email : {email}\n"
