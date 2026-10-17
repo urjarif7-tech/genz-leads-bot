@@ -19,7 +19,7 @@ USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 # Cliproxy API Credentials
 CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
 
-# Trustsource API & Credentials (Fast Gateway)
+# Trustsource API & Credentials (711 Proxy - untouched & safe)
 TRUSTSOURCE_USERNAME = "USER702036"
 TRUSTSOURCE_PASSWORD = "60b3d6"
 TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
@@ -270,11 +270,14 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
+    # Nexlabs এর মতো ফাঁকা ফাঁকা এবং আন্ডারলাইন স্টাইল
     welcome_text = (
-        f"👋 **Welcome {user_first_name}!**\n\n"
-        f"`Daily Earnings: {api_daily_earnings} TK`\n"
-        f"`Daily Spend: {daily_spend} TK`\n"
-        f"`Balance: {balance} TK`\n\n"
+        f"👋 **Welcome {user_first_name} To Nex - Labs**\n\n"
+        f"Daily Earnings: {api_daily_earnings} TK\n"
+        f"────────────────────\n"
+        f"Daily Spend: {daily_spend} TK\n"
+        f"────────────────────\n"
+        f"Balance: {balance} TK\n\n"
         f"Click the button below to view live leads or buy proxy."
     )
 
@@ -334,13 +337,15 @@ def generate_due_query_text(telegram_id):
     u_data = get_user_db(uid)
     logs = u_data['due_logs']
 
+    # ডিউ কোয়ারির একেবারে উপরে NexLab এর মতো YOUR DUE SUMMARY
+    text = "📋 **YOUR DUE SUMMARY**\n-------------------------\n"
+
     if not logs:
-        text = "📋 **DUE QUERY**\n\n❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
+        text += "❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
         return text, markup
 
-    text = ""
     tot_due = 0.0
     tot_paid = 0.0
 
@@ -363,7 +368,6 @@ def generate_due_query_text(telegram_id):
 
     curr_bal = get_effective_balance(uid)
 
-    text += "-------------------------\n"
     text += f"Total Due:   {tot_due:,.1f} TK\n"
     text += f"Total Paid:  {tot_paid:,.1f} TK\n"
     text += f"Balance:     {curr_bal:,.1f} TK\n"
@@ -500,6 +504,8 @@ def handle_buy_clip_confirm(call):
         return
 
     proxy_urls_list = []
+    ip_details_list = []
+
     try:
         clip_api = f"https://webipapi.cliproxy.com/api/getIpInfo?key={CLIPROXY_KEY}&port=443&num={quantity}&country=US&state={state_name}&type=2"
         res = requests.get(clip_api, timeout=10)
@@ -513,8 +519,18 @@ def handle_buy_clip_confirm(call):
                         host, port, username, password = parts_ip
                         formatted_proxy = f"http://{username}:{password}@{host}:{port}"
                         proxy_urls_list.append(formatted_proxy)
+                        
+                        # Fetch ISP and Exit details like Nexlab
+                        try:
+                            ip_info = requests.get(f"http://ipinfo.io/{host}/json", timeout=3).json()
+                            isp = ip_info.get("org", "Unknown ISP")
+                            city = ip_info.get("city", state_name)
+                            ip_details_list.append(f"📡 ISP: {isp}\n📍 Exit: {city}, {state_name} ({host})")
+                        except Exception:
+                            ip_details_list.append(f"📍 Exit: {state_name} ({host})")
                     else:
                         proxy_urls_list.append(line_str)
+                        ip_details_list.append(f"📍 Exit: {state_name}")
     except Exception as e:
         print(f"Cliproxy API Error: {e}")
 
@@ -523,6 +539,7 @@ def handle_buy_clip_confirm(call):
             session_id = random.randint(100000, 999999)
             username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
             proxy_urls_list.append(f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
+            ip_details_list.append(f"📍 Gateway: {TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -542,6 +559,7 @@ def handle_buy_clip_confirm(call):
     save_user_db(uid, u_data)
 
     proxy_display_text = "\n".join(proxy_urls_list)
+    details_display_text = "\n".join(ip_details_list)
 
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(proxy_display_text)
@@ -552,11 +570,13 @@ def handle_buy_clip_confirm(call):
     img.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
 
+    # Proxy: লিঙ্ক রিমুভ করে নেক্সল্যাবের মতো ISP ও Exit দেখানো হয়েছে
     caption = (
         f"✅ **PROXY VERIFIED & CHARGED ({len(proxy_urls_list)}/{quantity})**\n\n"
         f"💳 Charged: {cost} TK\n"
-        f"🌐 Cliproxy (States) ({state_name}, United States)\n"
-        f"📍 Proxy:\n`{proxy_display_text}`"
+        f"🖼️ {state_name}, United States\n"
+        f"{details_display_text}\n\n"
+        f"`{proxy_display_text}`"
     )
 
     try:
@@ -574,7 +594,8 @@ def handle_buy_clip_confirm(call):
     )
 
     markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_states = types.InlineKeyboardButton("🦊 States", callback_data="prov_cliproxy")
+    # ফক্স ইমোজির বদলে ইমেজ 🖼️ ইমোজি ব্যবহার করা হয়েছে
+    btn_states = types.InlineKeyboardButton("🖼️ States", callback_data="prov_cliproxy")
     btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
     markup.add(btn_states, btn_back)
 
@@ -649,7 +670,7 @@ def handle_buy_711_confirm(call):
         return
 
     proxy_urls_list = []
-    # সুপার-ফাস্ট গেটওয়ে এবং অপ্টিমাইজড সেশন ফরম্যাট (কোনো এক্সট্রা ডিলে ছাড়াই ইন্সট্যান্ট জেনারেট হবে)
+    # 711 প্রক্সির আসল এবং সঠিক কনফিগারেশন সম্পূর্ণ অক্ষুণ্ণ রাখা হয়েছে যাতে কোনো সমস্যা না হয়
     for _ in range(quantity):
         session_id = random.randint(100000, 999999)
         username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
@@ -984,7 +1005,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
