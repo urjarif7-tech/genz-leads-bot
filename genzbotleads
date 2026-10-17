@@ -19,11 +19,14 @@ USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 # Cliproxy API Credentials
 CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
 
-# Trustsource Proxy Credentials
-TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
-TRUSTSOURCE_PORT = "20000"
+# Trustsource API & Credentials (from official documentation)
+TRUSTSOURCE_API = "http://gen.trustsource.live/gen"
+TRUSTSOURCE_ZONE = "custom"
+TRUSTSOURCE_PTYPE = "2"
 TRUSTSOURCE_USERNAME = "USER702036"
 TRUSTSOURCE_PASSWORD = "60b3d6"
+TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
+TRUSTSOURCE_PORT = "20000"
 
 # Turso Database Credentials
 TURSO_URL = os.environ.get('TURSO_DATABASE_URL', '')
@@ -522,10 +525,7 @@ def handle_buy_clip_confirm(call):
         for _ in range(quantity):
             session_id = random.randint(100000, 999999)
             username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-{state_code}-session-{session_id}"
-            password = TRUSTSOURCE_PASSWORD
-            host = TRUSTSOURCE_HOST
-            port = TRUSTSOURCE_PORT
-            proxy_urls_list.append(f"socks5://{username}:{password}@{host}:{port}")
+            proxy_urls_list.append(f"socks5://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -585,7 +585,7 @@ def handle_buy_clip_confirm(call):
     bot.answer_callback_query(call.id)
 
 
-# --- 🚀 711 PROXY (STATES) MENU ---
+# --- 🚀 711 PROXY / TRUSTSOURCE (STATES) MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
 def handle_711proxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -652,13 +652,34 @@ def handle_buy_711_confirm(call):
         return
 
     proxy_urls_list = []
-    for _ in range(quantity):
-        session_id = random.randint(100000, 999999)
-        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-{state_code}-session-{session_id}"
-        password = TRUSTSOURCE_PASSWORD
-        host = TRUSTSOURCE_HOST
-        port = TRUSTSOURCE_PORT
-        proxy_urls_list.append(f"socks5://{username}:{password}@{host}:{port}")
+    try:
+        # Trustsource Official API Call
+        api_url = f"{TRUSTSOURCE_API}?zone={TRUSTSOURCE_ZONE}&ptype={TRUSTSOURCE_PTYPE}&region={state_code.upper()}&count={quantity}&proto=socks5&stype=text"
+        res = requests.get(api_url, timeout=10)
+        
+        if res.status_code == 200:
+            lines = res.text.strip().splitlines()
+            for line in lines:
+                line_str = line.strip()
+                if line_str:
+                    if ":" in line_str and not line_str.startswith("socks5"):
+                        ip_pt = line_str.split(':')
+                        ip, port = ip_pt[0], ip_pt[1]
+                        session_id = random.randint(100000, 999999)
+                        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-{state_code}-session-{session_id}"
+                        formatted_proxy = f"socks5://{username}:{TRUSTSOURCE_PASSWORD}@{ip}:{port}"
+                        proxy_urls_list.append(formatted_proxy)
+                    else:
+                        proxy_urls_list.append(line_str)
+    except Exception as e:
+        print(f"Trustsource API Error: {e}")
+
+    # Fallback if API fails
+    if not proxy_urls_list:
+        for _ in range(quantity):
+            session_id = random.randint(100000, 999999)
+            username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-{state_code}-session-{session_id}"
+            proxy_urls_list.append(f"socks5://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
 
     uid = str(call.from_user.id)
     u_data = get_user_db(uid)
@@ -988,7 +1009,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
