@@ -3,4 +3,3 @@ requests
 Flask
 qrcode
 Pillow
-libsql-client
