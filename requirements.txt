@@ -1,6 +1,6 @@
 pyTelegramBotAPI
 requests
-flask
+Flask
 qrcode
 Pillow
-firebase-admin
+libsql-experimental
