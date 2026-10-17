@@ -38,6 +38,47 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
+def parse_relative_time(created_val):
+    if not created_val or str(created_val).lower() == 'n/a':
+        return 'N/A'
+    
+    val_str = str(created_val).strip()
+    
+    # If it's already in 'ago' format
+    if 'ago' in val_str.lower() or 'just now' in val_str.lower():
+        return val_str
+
+    # Try parsing YYYY-MM-DD HH:MM:SS format
+    try:
+        if 'T' in val_str:
+            dt = datetime.fromisoformat(val_str.replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                now = datetime.now(timezone.utc)
+            else:
+                now = datetime.utcnow()
+        else:
+            dt = datetime.strptime(val_str, "%Y-%m-%d %H:%M:%S")
+            now = datetime.utcnow()
+            
+        diff = now - dt
+        seconds = int(diff.total_seconds())
+
+        if seconds < 0:
+            seconds = abs(seconds)
+
+        if seconds < 60:
+            return f"{seconds}s ago"
+        elif seconds < 3600:
+            return f"{seconds // 60}m ago"
+        elif seconds < 86400:
+            return f"{seconds // 3600}h ago"
+        else:
+            return f"{seconds // 86400}d ago"
+    except Exception:
+        pass
+
+    return val_str
+
 # Convert libsql:// or https:// to raw HTTP Endpoint for Turso
 def get_turso_http_url():
     if not TURSO_URL:
@@ -307,7 +348,8 @@ def build_lead_message(data):
         offer = str(lead.get('offer_name', 'N/A')).replace('*', '')
         reward = str(lead.get('points', '0')).replace('*', '')
         time_ago = str(lead.get('time_ago', 'Just now')).replace('*', '')
-        created_at = str(lead.get('created_at', 'N/A')).replace('*', '')
+        raw_created_at = lead.get('created_at', 'N/A')
+        created_at = parse_relative_time(raw_created_at)
 
         message_text += f"Name : {name}\n"
         message_text += f"Email : {email}\n"
