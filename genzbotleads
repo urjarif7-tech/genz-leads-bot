@@ -655,7 +655,7 @@ def handle_buy_711_confirm(call):
     ip_details_list = []
 
     try:
-        # Trustsource API কল করে সরাসরি Exit IP ও বিস্তারিত তথ্য নিয়ে আসা
+        # Trustsource API Call with error handling and fallback
         api_url = f"{TRUSTSOURCE_API}?zone={TRUSTSOURCE_ZONE}&ptype={TRUSTSOURCE_PTYPE}&region=US&st={state_name}&count={quantity}&proto=http&stype=json"
         res = requests.get(api_url, timeout=10)
         
@@ -672,7 +672,6 @@ def handle_buy_711_confirm(call):
                         proxy_url = f"http://{username}:{TRUSTSOURCE_PASSWORD}@{ip}:{port}"
                         proxy_urls_list.append(proxy_url)
                         
-                        # আইপির বিস্তারিত তথ্য ফেচ করা (ISP ও City)
                         try:
                             ip_info = requests.get(f"http://ipinfo.io/{ip}/json", timeout=3).json()
                             isp = ip_info.get("org", "Unknown ISP")
@@ -683,7 +682,7 @@ def handle_buy_711_confirm(call):
     except Exception as e:
         print(f"Trustsource API Error: {e}")
 
-    # যদি API থেকে ডাটা না আসে তবে ফলব্যাক ফরম্যাট
+    # Fallback to Gateway if API fails or returns empty list
     if not proxy_urls_list:
         for _ in range(quantity):
             session_id = random.randint(100000, 999999)
