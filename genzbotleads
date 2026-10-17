@@ -2,11 +2,11 @@ import os
 import time
 import io
 import threading
-import sqlite3
 import json
 import random
 import requests
 import qrcode
+import libsql_experimental as libsql
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -19,6 +19,10 @@ USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 # Cliproxy API Credentials
 CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
 
+# Turso Database Credentials
+TURSO_URL = os.environ.get('TURSO_DATABASE_URL', '')
+TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
+
 # --- Configuration ---
 ADMIN_ID = 7089010379
 
@@ -28,11 +32,16 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
-# --- SQLite Database Initialization ---
-DB_FILE = "bot_database.db"
+# --- Turso Cloud Database Connection ---
+def get_db_connection():
+    if TURSO_URL and TURSO_TOKEN:
+        return libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
+    else:
+        # Local Fallback
+        return libsql.connect("bot_database.db")
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -51,7 +60,7 @@ def init_db():
 init_db()
 
 def get_user_db(telegram_id):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     t_id = str(telegram_id).strip()
     cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
@@ -87,7 +96,7 @@ def get_user_db(telegram_id):
         }
 
 def save_user_db(telegram_id, data):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     t_id = str(telegram_id).strip()
     cursor.execute('''
@@ -419,7 +428,6 @@ def handle_buy_clip_confirm(call):
             for line in lines:
                 line_str = line.strip()
                 if line_str:
-                    # Check if format is host:port:username:password and add http:// prefix
                     parts_ip = line_str.split(':')
                     if len(parts_ip) == 4 and not line_str.startswith("http") and not line_str.startswith("socks"):
                         host, port, username, password = parts_ip
@@ -430,7 +438,6 @@ def handle_buy_clip_confirm(call):
     except Exception as e:
         print(f"Cliproxy API Error: {e}")
 
-    # Fallback to local format generation if API fails or returns empty
     if not proxy_urls_list:
         for _ in range(quantity):
             session_id = random.randint(100000, 999999)
@@ -459,7 +466,6 @@ def handle_buy_clip_confirm(call):
 
     proxy_display_text = "\n".join(proxy_urls_list)
 
-    # Generate QR Code so it works for both scanning and copying
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(proxy_display_text)
     qr.make(fit=True)
@@ -768,7 +774,7 @@ def process_request_amount(message):
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
     
     admin_text = (
         f"📥 **NEW BALANCE REQUEST!**\n\n"
@@ -832,7 +838,7 @@ def handle_pagination(call):
 
 @app.route('/')
 def home():
-    return "Telegram Bot Server is Running!"
+    return "Telegram Bot Server is Running with Turso Database!"
 
 if __name__ == '__main__':
     threading.Thread(target=auto_refresh_loop, daemon=True).start()
