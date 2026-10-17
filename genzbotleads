@@ -270,11 +270,11 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
-    # কাস্টমাইজড টাইটেল, দাগ ছাড়া ফাঁকা স্পেস এবং ক্লিক মেসেজ রিমুভ করা হয়েছে
+    # ফাকা স্পেস কমিয়ে একদম পাশাপাশি লাইনে রাখা হয়েছে
     welcome_text = (
         f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
-        f"Daily Earnings: {api_daily_earnings} TK\n\n"
-        f"Daily Spend: {daily_spend} TK\n\n"
+        f"Daily Earnings: {api_daily_earnings} TK\n"
+        f"Daily Spend: {daily_spend} TK\n"
         f"Balance: {balance} TK"
     )
 
