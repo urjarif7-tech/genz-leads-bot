@@ -6,7 +6,7 @@ import json
 import random
 import requests
 import qrcode
-import libsql_client
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from flask import Flask
@@ -32,19 +32,68 @@ app = Flask(__name__)
 active_messages = {}
 admin_states = {}
 
-# --- Turso Cloud Database Connection ---
-def get_db_connection():
-    if TURSO_URL and TURSO_TOKEN:
-        return libsql_client.create_client(url=TURSO_URL, auth_token=TURSO_TOKEN)
-    else:
-        # Local Fallback using standard sqlite3 if cloud credentials are missing
-        import sqlite3
-        return sqlite3.connect("bot_database.db")
+# Convert libsql:// or https:// to raw HTTP Endpoint for Turso
+def get_turso_http_url():
+    if not TURSO_URL:
+        return ""
+    url = TURSO_URL.replace("libsql://", "https://")
+    if not url.startswith("https://"):
+        url = "https://" + url
+    return url.rstrip('/') + "/v2/pipeline"
+
+# Helper function to execute SQL on Turso via pure HTTP REST API
+def execute_turso_query(stmt, args=None):
+    turso_endpoint = get_turso_http_url()
+    if not turso_endpoint or not TURSO_TOKEN:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {TURSO_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    formatted_args = []
+    if args:
+        for arg in args:
+            if isinstance(arg, float):
+                formatted_args.append({"type": "float", "value": arg})
+            elif isinstance(arg, int):
+                formatted_args.append({"type": "integer", "value": str(arg)})
+            elif arg is None:
+                formatted_args.append({"type": "null"})
+            else:
+                formatted_args.append({"type": "text", "value": str(arg)})
+
+    payload = {
+        "requests": [
+            {
+                "type": "execute",
+                "stmt": {
+                    "sql": stmt,
+                    "args": formatted_args
+                }
+            },
+            {"type": "close"}
+        ]
+    }
+
+    try:
+        res = requests.post(turso_endpoint, json=payload, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            results = data.get("results", [])
+            if results and results[0].get("type") == "ok":
+                return results[0].get("response", {}).get("result", {})
+    except Exception as e:
+        print(f"Turso HTTP Query Error: {e}")
+    return None
+
+# Local SQLite Fallback Helper
+DB_FILE = "bot_database.db"
 
 def init_db():
-    client = get_db_connection()
     if TURSO_URL and TURSO_TOKEN:
-        client.execute('''
+        stmt = '''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id TEXT PRIMARY KEY,
                 balance REAL DEFAULT 0.0,
@@ -54,10 +103,11 @@ def init_db():
                 purchases TEXT DEFAULT '[]',
                 due_logs TEXT DEFAULT '[]'
             )
-        ''')
-        client.close()
+        '''
+        execute_turso_query(stmt)
     else:
-        cursor = client.cursor()
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id TEXT PRIMARY KEY,
@@ -69,58 +119,82 @@ def init_db():
                 due_logs TEXT DEFAULT '[]'
             )
         ''')
-        client.commit()
-        client.close()
+        conn.commit()
+        conn.close()
 
 init_db()
 
 def get_user_db(telegram_id):
-    client = get_db_connection()
     t_id = str(telegram_id).strip()
-    
+
     if TURSO_URL and TURSO_TOKEN:
-        rs = client.execute("SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?", [t_id])
-        row = rs.rows[0] if rs.rows else None
-        client.close()
+        stmt = "SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?"
+        result = execute_turso_query(stmt, [t_id])
+        if result and result.get("rows"):
+            row = result["rows"][0]
+            # parsing row values from HTTP API JSON structure
+            val_balance = float(row[0].get("value", 0.0)) if row[0].get("value") is not None else 0.0
+            val_spend = float(row[1].get("value", 0.0)) if row[1].get("value") is not None else 0.0
+            val_due = float(row[2].get("value", 0.0)) if row[2].get("value") is not None else 0.0
+            val_paid = float(row[3].get("value", 0.0)) if row[3].get("value") is not None else 0.0
+            raw_purchases = row[4].get("value", "[]")
+            raw_due_logs = row[5].get("value", "[]")
+
+            try:
+                purchases = json.loads(raw_purchases) if raw_purchases else []
+            except Exception:
+                purchases = []
+            try:
+                due_logs = json.loads(raw_due_logs) if raw_due_logs else []
+            except Exception:
+                due_logs = []
+
+            return {
+                'balance': val_balance,
+                'spend': val_spend,
+                'due': val_due,
+                'paid': val_paid,
+                'purchases': purchases,
+                'due_logs': due_logs
+            }
     else:
-        cursor = client.cursor()
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
         cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
         row = cursor.fetchone()
-        client.close()
+        conn.close()
 
-    if row:
-        try:
-            purchases = json.loads(row[4]) if row[4] else []
-        except Exception:
-            purchases = []
-        try:
-            due_logs = json.loads(row[5]) if row[5] else []
-        except Exception:
-            due_logs = []
+        if row:
+            try:
+                purchases = json.loads(row[4]) if row[4] else []
+            except Exception:
+                purchases = []
+            try:
+                due_logs = json.loads(row[5]) if row[5] else []
+            except Exception:
+                due_logs = []
 
-        return {
-            'balance': float(row[0] or 0.0),
-            'spend': float(row[1] or 0.0),
-            'due': float(row[2] or 0.0),
-            'paid': float(row[3] or 0.0),
-            'purchases': purchases,
-            'due_logs': due_logs
-        }
-    else:
-        return {
-            'balance': 0.0,
-            'spend': 0.0,
-            'due': 0.0,
-            'paid': 0.0,
-            'purchases': [],
-            'due_logs': []
-        }
+            return {
+                'balance': float(row[0] or 0.0),
+                'spend': float(row[1] or 0.0),
+                'due': float(row[2] or 0.0),
+                'paid': float(row[3] or 0.0),
+                'purchases': purchases,
+                'due_logs': due_logs
+            }
+
+    return {
+        'balance': 0.0,
+        'spend': 0.0,
+        'due': 0.0,
+        'paid': 0.0,
+        'purchases': [],
+        'due_logs': []
+    }
 
 def save_user_db(telegram_id, data):
-    client = get_db_connection()
     t_id = str(telegram_id).strip()
-    
-    params = [
+    args = [
         t_id,
         float(data.get('balance', 0.0)),
         float(data.get('spend', 0.0)),
@@ -131,19 +205,20 @@ def save_user_db(telegram_id, data):
     ]
 
     if TURSO_URL and TURSO_TOKEN:
-        client.execute('''
+        stmt = '''
             INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', params)
-        client.close()
+        '''
+        execute_turso_query(stmt, args)
     else:
-        cursor = client.cursor()
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', params)
-        client.commit()
-        client.close()
+        ''', args)
+        conn.commit()
+        conn.close()
 
 # US States List for Cliproxy
 US_STATES = [
@@ -869,7 +944,7 @@ def handle_pagination(call):
 
 @app.route('/')
 def home():
-    return "Telegram Bot Server is Running with Turso Cloud Database!"
+    return "Telegram Bot Server is Running with Turso Cloud Database via HTTP API!"
 
 if __name__ == '__main__':
     threading.Thread(target=auto_refresh_loop, daemon=True).start()
