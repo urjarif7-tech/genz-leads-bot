@@ -41,6 +41,7 @@ app = Flask(__name__)
 
 active_messages = {}
 admin_states = {}
+user_states = {} # ইউজার উইজার্ড ও ব্যাংক/ডিউ ইনপুট ট্র্যাক করার জন্য
 
 # Services & Prices Configuration
 SERVICES_PRICES = {
@@ -170,7 +171,8 @@ def init_db():
                 due REAL DEFAULT 0.0,
                 paid REAL DEFAULT 0.0,
                 purchases TEXT DEFAULT '[]',
-                due_logs TEXT DEFAULT '[]'
+                due_logs TEXT DEFAULT '[]',
+                bank_details TEXT DEFAULT '{}'
             )
         '''
         execute_turso_query(stmt)
@@ -185,7 +187,8 @@ def init_db():
                 due REAL DEFAULT 0.0,
                 paid REAL DEFAULT 0.0,
                 purchases TEXT DEFAULT '[]',
-                due_logs TEXT DEFAULT '[]'
+                due_logs TEXT DEFAULT '[]',
+                bank_details TEXT DEFAULT '{}'
             )
         ''')
         conn.commit()
@@ -197,7 +200,7 @@ def get_user_db(telegram_id):
     t_id = str(telegram_id).strip()
 
     if TURSO_URL and TURSO_TOKEN:
-        stmt = "SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?"
+        stmt = "SELECT balance, spend, due, paid, purchases, due_logs, bank_details FROM users WHERE telegram_id = ?"
         result = execute_turso_query(stmt, [t_id])
         if result and result.get("rows"):
             row = result["rows"][0]
@@ -207,6 +210,7 @@ def get_user_db(telegram_id):
             val_paid = float(row[3].get("value", 0.0)) if row[3].get("value") is not None else 0.0
             raw_purchases = row[4].get("value", "[]")
             raw_due_logs = row[5].get("value", "[]")
+            raw_bank = row[6].get("value", "{}")
 
             try:
                 purchases = json.loads(raw_purchases) if raw_purchases else []
@@ -216,6 +220,10 @@ def get_user_db(telegram_id):
                 due_logs = json.loads(raw_due_logs) if raw_due_logs else []
             except Exception:
                 due_logs = []
+            try:
+                bank_details = json.loads(raw_bank) if raw_bank else {}
+            except Exception:
+                bank_details = {}
 
             return {
                 'balance': val_balance,
@@ -223,12 +231,13 @@ def get_user_db(telegram_id):
                 'due': val_due,
                 'paid': val_paid,
                 'purchases': purchases,
-                'due_logs': due_logs
+                'due_logs': due_logs,
+                'bank_details': bank_details
             }
     else:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
+        cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs, bank_details FROM users WHERE telegram_id = ?', (t_id,))
         row = cursor.fetchone()
         conn.close()
 
@@ -241,6 +250,10 @@ def get_user_db(telegram_id):
                 due_logs = json.loads(row[5]) if row[5] else []
             except Exception:
                 due_logs = []
+            try:
+                bank_details = json.loads(row[6]) if row[6] else {}
+            except Exception:
+                bank_details = {}
 
             return {
                 'balance': float(row[0] or 0.0),
@@ -248,7 +261,8 @@ def get_user_db(telegram_id):
                 'due': float(row[2] or 0.0),
                 'paid': float(row[3] or 0.0),
                 'purchases': purchases,
-                'due_logs': due_logs
+                'due_logs': due_logs,
+                'bank_details': bank_details
             }
 
     return {
@@ -257,7 +271,8 @@ def get_user_db(telegram_id):
         'due': 0.0,
         'paid': 0.0,
         'purchases': [],
-        'due_logs': []
+        'due_logs': [],
+        'bank_details': {}
     }
 
 def save_user_db(telegram_id, data):
@@ -269,21 +284,22 @@ def save_user_db(telegram_id, data):
         float(data.get('due', 0.0)),
         float(data.get('paid', 0.0)),
         json.dumps(data.get('purchases', [])),
-        json.dumps(data.get('due_logs', []))
+        json.dumps(data.get('due_logs', [])),
+        json.dumps(data.get('bank_details', {}))
     ]
 
     if TURSO_URL and TURSO_TOKEN:
         stmt = '''
-            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs, bank_details)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         '''
         execute_turso_query(stmt, args)
     else:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs, bank_details)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', args)
         conn.commit()
         conn.close()
@@ -304,8 +320,6 @@ def fetch_leads(page=1):
         response = requests.get(f"{API_URL}?page={page}", timeout=10)
         if response.status_code == 200:
             return response.json()
-        else:
-            print(f"API Error Response: {response.status_code}")
     except Exception as e:
         print(f"Error fetching leads: {e}")
     return None
@@ -331,14 +345,12 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     
     uid = str(telegram_id)
     u_data = get_user_db(uid)
-    daily_spend = u_data['spend']
     balance = get_effective_balance(telegram_id)
 
+    # স্ক্রিনশট অনুযায়ী মেনু পেজ (Daily Spend বাদ দেওয়া হয়েছে এবং Profile বাটন যোগ করা হয়েছে)
     welcome_text = (
         f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
         f"📥 `Daily Earnings: {api_daily_earnings} TK`\n"
-        f"────────────────────────\n"
-        f"📤 `Daily Spend: {daily_spend} TK`\n"
         f"────────────────────────\n"
         f"💳 `Balance: {balance} TK`"
     )
@@ -346,19 +358,223 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
     btn_buy_number = types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
-    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
-    btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
+    btn_leads = types.InlineKeyboardButton("📊 Live Leads", callback_data="page_1")
+    btn_request = types.InlineKeyboardButton("📝 Request", callback_data="menu_request")
     btn_due_query = types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
-    btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
+    btn_profile = types.InlineKeyboardButton("👤 Profile", callback_data="menu_profile")
     
     markup.add(btn_buy_proxy, btn_buy_number)
     markup.add(btn_leads, btn_request)
-    markup.add(btn_due_query, btn_history)
+    markup.add(btn_due_query, btn_profile)
     
     return welcome_text, markup
 
-# --- 📱 BUY NUMBER FLOW (DURIANRCS INTEGRATION) ---
+# --- 👤 PROFILE & CHOOSE AN OPTION FLOW ---
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_profile')
+def handle_profile_menu(call):
+    text = "👤 **PROFILE**\n\nChoose an option:"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_earnings = types.InlineKeyboardButton("💰 Earnings", callback_data="coming_soon")
+    btn_add_bank = types.InlineKeyboardButton("🏦 Add Bank", callback_data="add_bank_router")
+    btn_pay_due = types.InlineKeyboardButton("📄 Pay Due", callback_data="pay_due_start")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
 
+    markup.add(btn_earnings)
+    markup.add(btn_add_bank, btn_pay_due)
+    markup.add(btn_back)
+
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'add_bank_router')
+def handle_add_bank_router(call):
+    uid = str(call.from_user.id)
+    u_data = get_user_db(uid)
+    bank = u_data.get('bank_details', {})
+
+    # একবার সেট করা থাকলে সরাসরি ব্যাংক ডিটেইলস পেজে নিয়ে যাবে
+    if bank and bank.get('bank_name') and bank.get('account_number'):
+        show_bank_details(call.message.chat.id, call.message.message_id, bank)
+    else:
+        user_states[uid] = {'step': 'bank_name', 'data': {}}
+        text = "✏️ **EDIT BANK DETAILS**\n\nEnter your Bank Name:"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+def show_bank_details(chat_id, message_id, bank):
+    text = (
+        f"🏦 **YOUR BANK DETAILS**\n\n"
+        f"Bank Name:     {bank.get('bank_name')}\n"
+        f"Account Name:  {bank.get('account_name')}\n"
+        f"Account Number: {bank.get('account_number')}\n"
+        f"Division:      {bank.get('division')}\n"
+        f"Branch:        {bank.get('branch')}\n"
+        f"Bkash Number:  {bank.get('bkash_number')}"
+    )
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_edit = types.InlineKeyboardButton("✏️ Edit", callback_data="bank_edit_start")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile")
+    markup.add(btn_edit, btn_back)
+
+    try:
+        bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown', reply_markup=markup)
+    except Exception:
+        bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'bank_edit_start')
+def handle_bank_edit_start(call):
+    uid = str(call.from_user.id)
+    user_states[uid] = {'step': 'bank_name', 'data': {}}
+    text = "✏️ **EDIT BANK DETAILS**\n\nEnter your Bank Name:"
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'pay_due_start')
+def handle_pay_due_start(call):
+    uid = str(call.from_user.id)
+    u_data = get_user_db(uid)
+    
+    # due_logs থেকে টোটাল ডিউ হিসাব করা
+    logs = u_data.get('due_logs', [])
+    total_due = 0.0
+    for entry in logs:
+        p = float(entry.get('price', 0.0))
+        pd = float(entry.get('paid', 0.0))
+        total_due += max(0.0, p - pd)
+
+    text = (
+        f"🧾 **PAY DUE**\n"
+        f"🛒 Your Purchase Due: {total_due:,.1f} TK\n\n"
+        f"How much you pay? (TK)"
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+    
+    user_states[uid] = {'step': 'pay_due_input'}
+
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+# Admin Command: /bank <user_id>
+@bot.message_handler(commands=['bank'])
+def admin_view_bank(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized to use this command.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "Usage: `/bank <user_id>`", parse_mode='Markdown')
+        return
+
+    target_uid = parts[1].strip()
+    target_data = get_user_db(target_uid)
+    bank = target_data.get('bank_details', {})
+
+    if not bank or not bank.get('bank_name'):
+        bot.reply_to(message, f"❌ No bank details found for User ID: `{target_uid}`", parse_mode='Markdown')
+        return
+
+    text = (
+        f"🏦 **USER BANK DETAILS (Admin View)**\n\n"
+        f"User ID: {target_uid}\n"
+        f"Bank Name:     {bank.get('bank_name')}\n"
+        f"Account Name:  {bank.get('account_name')}\n"
+        f"Account Number: {bank.get('account_number')}\n"
+        f"Division:      {bank.get('division')}\n"
+        f"Branch:        {bank.get('branch')}\n"
+        f"Bkash Number:  {bank.get('bkash_number')}"
+    )
+    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+
+# --- TEXT INPUT WIZARD HANDLER (Bank Setup & Pay Due) ---
+@bot.message_handler(func=lambda message: str(message.from_user.id) in user_states)
+def handle_user_text_inputs(message):
+    uid = str(message.from_user.id)
+    state_info = user_states.get(uid)
+    if not state_info:
+        return
+
+    step = state_info.get('step')
+    text_val = message.text.strip()
+
+    if step == 'bank_name':
+        state_info['data']['bank_name'] = text_val
+        state_info['step'] = 'account_name'
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="bank_edit_start"))
+        bot.send_message(message.chat.id, "Enter your Account Name:", reply_markup=markup)
+
+    elif step == 'account_name':
+        state_info['data']['account_name'] = text_val
+        state_info['step'] = 'account_number'
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="bank_edit_start"))
+        bot.send_message(message.chat.id, "Enter your Account Number:", reply_markup=markup)
+
+    elif step == 'account_number':
+        state_info['data']['account_number'] = text_val
+        state_info['step'] = 'division'
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="bank_edit_start"))
+        bot.send_message(message.chat.id, "Enter your Division:", reply_markup=markup)
+
+    elif step == 'division':
+        state_info['data']['division'] = text_val
+        state_info['step'] = 'branch'
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="bank_edit_start"))
+        bot.send_message(message.chat.id, "Enter your Branch:", reply_markup=markup)
+
+    elif step == 'branch':
+        state_info['data']['branch'] = text_val
+        state_info['step'] = 'bkash_number'
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="bank_edit_start"))
+        bot.send_message(message.chat.id, "Enter your Bkash Number:", reply_markup=markup)
+
+    elif step == 'bkash_number':
+        state_info['data']['bkash_number'] = text_val
+        
+        u_data = get_user_db(uid)
+        u_data['bank_details'] = state_info['data']
+        save_user_db(uid, u_data)
+        
+        del user_states[uid]
+        bot.send_message(message.chat.id, "✅ Bank details saved successfully!")
+        show_bank_details(message.chat.id, message.message_id + 1, u_data['bank_details'])
+
+    elif step == 'pay_due_input':
+        try:
+            pay_amount = float(text_val)
+            u_data = get_user_db(uid)
+            if pay_amount > u_data['due']:
+                bot.reply_to(message, "❌ Amount exceeds your total due!")
+                return
+            
+            u_data['due'] -= pay_amount
+            save_user_db(uid, u_data)
+            del user_states[uid]
+            bot.reply_to(message, f"✅ Successfully requested to clear {pay_amount} TK due from your next earnings.")
+        except ValueError:
+            bot.reply_to(message, "❌ Please enter a valid numeric amount.")
+
+# --- NUMBER PURCHASING & PROXY HANDLERS ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_number')
 def handle_buy_number_provider(call):
     balance = get_effective_balance(call.from_user.id)
@@ -576,15 +792,6 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
 
         time.sleep(60)
         cancel_durian_number_api(order_id)
-        text_blocked = f"🔒 Number `{num_str}` auto-blocked."
-        markup_back = types.InlineKeyboardMarkup()
-        markup_back.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
-
-        try:
-            bot.edit_message_text(text_blocked, chat_id=chat_id, message_id=msg_id, parse_mode='Markdown', reply_markup=markup_back)
-        except Exception:
-            pass
-
     else:
         cancel_durian_number_api(order_id)
         text_noblock = (
@@ -600,7 +807,6 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         b_inbox = types.InlineKeyboardButton("InboxDollar - 14.0 TK", callback_data=f"numsrv_{country_code}_InboxDollar")
         b_copper = types.InlineKeyboardButton("Copper - 20.0 TK", callback_data=f"numsrv_{country_code}_Copper")
         btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="numprov_durian")
-
         markup.add(b_super, b_fetch)
         markup.add(b_pogo, b_reco)
         markup.add(b_inbox, b_copper)
@@ -775,7 +981,6 @@ def handle_buy_proxy(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# --- CLIPROXY STATES MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_cliproxy')
 def handle_cliproxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -937,7 +1142,6 @@ def handle_buy_clip_confirm(call):
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# --- 711 PROXY STATES MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
 def handle_711proxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -1067,7 +1271,6 @@ def handle_buy_711_confirm(call):
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# --- USER DUE QUERY HANDLER ---
 @bot.callback_query_handler(func=lambda call: call.data == 'due_query')
 def handle_user_due_query(call):
     text, markup = generate_due_query_text(call.from_user.id)
@@ -1083,7 +1286,6 @@ def handle_user_due_query(call):
     except Exception:
         bot.answer_callback_query(call.id)
 
-# --- USER PURCHASE HISTORY HANDLER ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('historypage_') or call.data == 'user_history')
 def handle_user_history(call):
     if call.data == 'user_history':
@@ -1161,7 +1363,8 @@ def handle_admin_dashboard(message):
         "`/paid <user_id> <YYYY-MM-DD> <amount>` - Clear/Adjust payment\n"
         "`/due <user_id>` - View user due query\n"
         "`/history <user_id>` - View user purchase history\n"
-        "`/adddue <user_id> <amount>` - Directly add due"
+        "`/adddue <user_id> <amount>` - Directly add due\n"
+        "`/bank <user_id>` - View user bank details"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -1354,7 +1557,6 @@ def process_request_amount(message):
     
     bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
-    # পূর্ণ নাম (First Name + Last Name) বের করার কোড
     first_name = message.from_user.first_name or ""
     last_name = message.from_user.last_name or ""
     full_name = f"{first_name} {last_name}".strip() or "Unknown"
