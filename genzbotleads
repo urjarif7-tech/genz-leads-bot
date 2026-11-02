@@ -334,10 +334,7 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
     btn_buy_number = types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
-    
-    # Live Leads বাটনে সরাসরি ওয়েবসাইট লিডারবোর্ডের লিঙ্ক যুক্ত করা হলো
     btn_leads = types.InlineKeyboardButton("🎯 Live Leads", url="https://genzreward.com/555/leads")
-    
     btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
     btn_due_query = types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
     btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
