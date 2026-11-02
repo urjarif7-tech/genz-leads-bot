@@ -304,8 +304,6 @@ def fetch_leads(page=1):
         response = requests.get(f"{API_URL}?page={page}", timeout=10)
         if response.status_code == 200:
             return response.json()
-        else:
-            print(f"API Error Response: {response.status_code}")
     except Exception as e:
         print(f"Error fetching leads: {e}")
     return None
@@ -357,8 +355,7 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     
     return welcome_text, markup
 
-# --- 📱 BUY NUMBER FLOW (DURIANRCS INTEGRATION) ---
-
+# --- BUY NUMBER FLOW ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_number')
 def handle_buy_number_provider(call):
     balance = get_effective_balance(call.from_user.id)
@@ -370,8 +367,7 @@ def handle_buy_number_provider(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_durian = types.InlineKeyboardButton("ℹ️ DurianRCS", callback_data="numprov_durian")
     btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
-    markup.add(btn_durian)
-    markup.add(btn_back)
+    markup.add(btn_durian, btn_back)
 
     try:
         bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
@@ -775,7 +771,6 @@ def handle_buy_proxy(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# --- CLIPROXY STATES MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_cliproxy')
 def handle_cliproxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -937,7 +932,6 @@ def handle_buy_clip_confirm(call):
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# --- 711 PROXY STATES MENU ---
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
 def handle_711proxy_states(call):
     balance = get_effective_balance(call.from_user.id)
@@ -1067,7 +1061,6 @@ def handle_buy_711_confirm(call):
     bot.send_message(call.message.chat.id, summary_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-# --- USER DUE QUERY HANDLER ---
 @bot.callback_query_handler(func=lambda call: call.data == 'due_query')
 def handle_user_due_query(call):
     text, markup = generate_due_query_text(call.from_user.id)
@@ -1083,7 +1076,6 @@ def handle_user_due_query(call):
     except Exception:
         bot.answer_callback_query(call.id)
 
-# --- USER PURCHASE HISTORY HANDLER ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('historypage_') or call.data == 'user_history')
 def handle_user_history(call):
     if call.data == 'user_history':
@@ -1147,7 +1139,6 @@ def handle_user_history(call):
     except Exception:
         bot.answer_callback_query(call.id)
 
-# --- ADMIN COMMANDS ---
 @bot.message_handler(commands=['admin', 'allusers'])
 def handle_admin_dashboard(message):
     if message.from_user.id != ADMIN_ID:
@@ -1354,7 +1345,6 @@ def process_request_amount(message):
     
     bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
-    # পূর্ণ নাম (First Name + Last Name) বের করার কোড
     first_name = message.from_user.first_name or ""
     last_name = message.from_user.last_name or ""
     full_name = f"{first_name} {last_name}".strip() or "Unknown"
@@ -1432,7 +1422,16 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
     
-    # এই লাইনটি যোগ করুন যাতে পুরোনো ওয়েবহুক রিমুভ হয়ে যায়
-    bot.remove_webhook()
+    try:
+        bot.remove_webhook()
+    except Exception as e:
+        print(f"Remove Webhook Error: {e}")
     
-    bot.infinity_polling()
+    print("🤖 GenzBot is starting polling...")
+    
+    while True:
+        try:
+            bot.infinity_polling(none_stop=True, interval=1, timeout=20)
+        except Exception as e:
+            print(f"Polling Error: {e}")
+            time.sleep(3)
