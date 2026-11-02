@@ -299,15 +299,6 @@ US_STATES = [
     "Washington", "West Virginia", "Wisconsin", "Wyoming"
 ]
 
-def fetch_leads(page=1):
-    try:
-        response = requests.get(f"{API_URL}?page={page}", timeout=5)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f"Error fetching leads: {e}")
-    return None
-
 def fetch_user_daily_earnings(telegram_id):
     try:
         response = requests.get(USER_API_URL, params={'telegram_id': str(telegram_id)}, timeout=3)
