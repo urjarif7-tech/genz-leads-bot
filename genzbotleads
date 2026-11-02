@@ -308,24 +308,23 @@ def fetch_leads(page=1):
         print(f"Error fetching leads: {e}")
     return None
 
-def fetch_user_stats_safe(telegram_id):
+def fetch_user_daily_earnings(telegram_id):
     try:
         response = requests.get(USER_API_URL, params={'telegram_id': str(telegram_id)}, timeout=3)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            if isinstance(data, dict):
+                return float(data.get('daily_earnings', 0.0))
     except Exception:
         pass
-    return {'registered': False, 'balance': 0.0, 'daily_earnings': 0.0}
+    return 0.0
 
 def get_effective_balance(telegram_id):
-    stats = fetch_user_stats_safe(telegram_id)
-    api_bal = float(stats.get('balance', 0.0)) if (stats and isinstance(stats, dict) and stats.get('registered')) else 0.0
     u_data = get_user_db(telegram_id)
-    return api_bal + u_data['balance']
+    return float(u_data.get('balance', 0.0))
 
 def build_welcome_dashboard(user_first_name, telegram_id):
-    stats = fetch_user_stats_safe(telegram_id)
-    api_daily_earnings = stats.get('daily_earnings', 0.0) if (stats and isinstance(stats, dict) and stats.get('registered')) else 0.0
+    api_daily_earnings = fetch_user_daily_earnings(telegram_id)
     
     uid = str(telegram_id)
     u_data = get_user_db(uid)
@@ -344,7 +343,10 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
     btn_buy_number = types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
-    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", callback_data="page_1")
+    
+    # Live Leads বাটনে সরাসরি ওয়েবসাইট লিডারবোর্ডের লিঙ্ক যুক্ত করা হলো
+    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", url="https://genzreward.com/555/leads")
+    
     btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
     btn_due_query = types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
     btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
@@ -625,48 +627,6 @@ def handle_manual_number_block(call):
     except Exception:
         bot.answer_callback_query(call.id)
 
-def build_lead_message(data):
-    leads = data.get('data', [])
-    current_page = data.get('current_page', 1)
-    last_page = min(data.get('last_page', 1), 5)
-
-    if not leads:
-        return "🎯 No Live Leads Found!", None
-
-    message_text = f"🎯 Live Leads List (Page {current_page}/{last_page})\n\n"
-    
-    for lead in leads:
-        name = str(lead.get('name', lead.get('user_id', 'N/A'))).replace('*', '')
-        email = str(lead.get('email', 'N/A')).replace('*', '')
-        provider = str(lead.get('provider', 'N/A')).replace('*', '')
-        offer = str(lead.get('offer_name', 'N/A')).replace('*', '')
-        reward = str(lead.get('points', '0')).replace('*', '')
-        
-        raw_time = lead.get('time_ago', 'N/A')
-        time_ago = parse_relative_time(raw_time)
-
-        message_text += f"Name : {name}\n"
-        message_text += f"Email : {email}\n"
-        message_text += f"Provider : {provider}\n"
-        message_text += f"Offer : {offer}\n"
-        message_text += f"Reward : {reward} Point\n"
-        message_text += f"Time : {time_ago}\n\n"
-
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"page_{current_page}"))
-
-    nav_buttons = []
-    if current_page > 1:
-        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{current_page - 1}"))
-    if current_page < last_page:
-        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"page_{current_page + 1}"))
-
-    if nav_buttons:
-        markup.row(*nav_buttons)
-
-    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
-    return message_text, markup
-
 def generate_due_query_text(telegram_id):
     uid = str(telegram_id)
     u_data = get_user_db(uid)
@@ -733,26 +693,6 @@ def generate_due_query_text(telegram_id):
     markup.add(btn_refresh, btn_back)
 
     return text, markup
-
-def auto_refresh_loop():
-    while True:
-        time.sleep(15)
-        for chat_id, info in list(active_messages.items()):
-            msg_id = info.get('message_id')
-            current_page = info.get('page', 1)
-            
-            data = fetch_leads(page=current_page)
-            if data:
-                msg_text, markup = build_lead_message(data)
-                try:
-                    bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=msg_text,
-                        reply_markup=markup
-                    )
-                except Exception:
-                    pass
 
 # --- BUY PROXY FLOW ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_proxy')
@@ -1385,40 +1325,11 @@ def handle_back_to_welcome(call):
         bot.send_message(call.message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('page_'))
-def handle_pagination(call):
-    try:
-        page = int(call.data.split('_')[1])
-    except Exception:
-        page = 1
-
-    data = fetch_leads(page=page)
-    
-    if data and data.get('data'):
-        msg_text, markup = build_lead_message(data)
-        try:
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=msg_text,
-                reply_markup=markup
-            )
-            active_messages[call.message.chat.id] = {
-                'message_id': call.message.message_id,
-                'page': page
-            }
-            bot.answer_callback_query(call.id)
-        except Exception:
-            bot.answer_callback_query(call.id)
-    else:
-        bot.answer_callback_query(call.id, text="⚠️ No live leads available or API connection error!", show_alert=True)
-
 @app.route('/')
 def home():
     return "Telegram Bot Server is Running with Turso Cloud Database via HTTP API!"
 
 if __name__ == '__main__':
-    threading.Thread(target=auto_refresh_loop, daemon=True).start()
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
     
