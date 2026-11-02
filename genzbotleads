@@ -1326,6 +1326,7 @@ if __name__ == '__main__':
     
     try:
         bot.remove_webhook()
+        time.sleep(1)
     except Exception as e:
         print(f"Remove Webhook Error: {e}")
     
