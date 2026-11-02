@@ -1431,4 +1431,8 @@ if __name__ == '__main__':
     threading.Thread(target=auto_refresh_loop, daemon=True).start()
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
-    bot.infinity_polling() 
+    
+    # এই লাইনটি যোগ করুন যাতে পুরোনো ওয়েবহুক রিমুভ হয়ে যায়
+    bot.remove_webhook()
+    
+    bot.infinity_polling()
