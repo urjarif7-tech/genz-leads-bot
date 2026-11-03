@@ -394,6 +394,7 @@ def build_welcome_dashboard(user_first_name, telegram_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     uid = message.from_user.id
+    
     if uid == ADMIN_ID:
         update_user_activity(uid, message.from_user.first_name or "Admin")
         active_messages.pop(message.chat.id, None)
@@ -406,6 +407,7 @@ def send_welcome(message):
     full_name = f"{first_name} {last_name}".strip() or "Unknown"
     
     update_user_activity(uid, full_name)
+    
     u_data = get_user_db(uid)
     status = u_data.get('status', 'pending')
 
@@ -421,7 +423,6 @@ def send_welcome(message):
     last_req = u_data.get('last_request', 0.0)
 
     if status == 'rejected':
-        # 24 Hours Cooldown for rejection (86400 seconds)
         if current_time - last_req < 86400:
             rem_seconds = int(86400 - (current_time - last_req))
             rem_hours = rem_seconds // 3600
@@ -433,14 +434,12 @@ def send_welcome(message):
             save_user_db(uid, u_data)
 
     elif status == 'pending' and last_req > 0:
-        # 5 Minutes Cooldown for pending request (300 seconds)
         if current_time - last_req < 300:
             rem_mins = int((300 - (current_time - last_req)) // 60)
             rem_secs = int((300 - (current_time - last_req)) % 60)
             bot.send_message(message.chat.id, f"⏳ Your request is already pending. Please wait or try again after {rem_mins} minutes {rem_secs} seconds.")
             return
 
-    # Send Request to Admin and Update last_request time
     u_data['last_request'] = current_time
     save_user_db(uid, u_data)
 
