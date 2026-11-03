@@ -165,6 +165,8 @@ def init_db():
         stmt = '''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id TEXT PRIMARY KEY,
+                full_name TEXT DEFAULT '',
+                last_active REAL DEFAULT 0.0,
                 balance REAL DEFAULT 0.0,
                 spend REAL DEFAULT 0.0,
                 due REAL DEFAULT 0.0,
@@ -180,6 +182,8 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id TEXT PRIMARY KEY,
+                full_name TEXT DEFAULT '',
+                last_active REAL DEFAULT 0.0,
                 balance REAL DEFAULT 0.0,
                 spend REAL DEFAULT 0.0,
                 due REAL DEFAULT 0.0,
@@ -197,16 +201,18 @@ def get_user_db(telegram_id):
     t_id = str(telegram_id).strip()
 
     if TURSO_URL and TURSO_TOKEN:
-        stmt = "SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?"
+        stmt = "SELECT full_name, last_active, balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?"
         result = execute_turso_query(stmt, [t_id])
         if result and result.get("rows"):
             row = result["rows"][0]
-            val_balance = float(row[0].get("value", 0.0)) if row[0].get("value") is not None else 0.0
-            val_spend = float(row[1].get("value", 0.0)) if row[1].get("value") is not None else 0.0
-            val_due = float(row[2].get("value", 0.0)) if row[2].get("value") is not None else 0.0
-            val_paid = float(row[3].get("value", 0.0)) if row[3].get("value") is not None else 0.0
-            raw_purchases = row[4].get("value", "[]")
-            raw_due_logs = row[5].get("value", "[]")
+            val_name = row[0].get("value", "") or ""
+            val_act = float(row[1].get("value", 0.0)) if row[1].get("value") is not None else 0.0
+            val_balance = float(row[2].get("value", 0.0)) if row[2].get("value") is not None else 0.0
+            val_spend = float(row[3].get("value", 0.0)) if row[3].get("value") is not None else 0.0
+            val_due = float(row[4].get("value", 0.0)) if row[4].get("value") is not None else 0.0
+            val_paid = float(row[5].get("value", 0.0)) if row[5].get("value") is not None else 0.0
+            raw_purchases = row[6].get("value", "[]")
+            raw_due_logs = row[7].get("value", "[]")
 
             try:
                 purchases = json.loads(raw_purchases) if raw_purchases else []
@@ -218,6 +224,8 @@ def get_user_db(telegram_id):
                 due_logs = []
 
             return {
+                'full_name': val_name,
+                'last_active': val_act,
                 'balance': val_balance,
                 'spend': val_spend,
                 'due': val_due,
@@ -228,30 +236,34 @@ def get_user_db(telegram_id):
     else:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
+        cursor.execute('SELECT full_name, last_active, balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
         row = cursor.fetchone()
         conn.close()
 
         if row:
             try:
-                purchases = json.loads(row[4]) if row[4] else []
+                purchases = json.loads(row[6]) if row[6] else []
             except Exception:
                 purchases = []
             try:
-                due_logs = json.loads(row[5]) if row[5] else []
+                due_logs = json.loads(row[7]) if row[7] else []
             except Exception:
                 due_logs = []
 
             return {
-                'balance': float(row[0] or 0.0),
-                'spend': float(row[1] or 0.0),
-                'due': float(row[2] or 0.0),
-                'paid': float(row[3] or 0.0),
+                'full_name': row[0] or "",
+                'last_active': float(row[1] or 0.0),
+                'balance': float(row[2] or 0.0),
+                'spend': float(row[3] or 0.0),
+                'due': float(row[4] or 0.0),
+                'paid': float(row[5] or 0.0),
                 'purchases': purchases,
                 'due_logs': due_logs
             }
 
     return {
+        'full_name': "",
+        'last_active': 0.0,
         'balance': 0.0,
         'spend': 0.0,
         'due': 0.0,
@@ -264,6 +276,8 @@ def save_user_db(telegram_id, data):
     t_id = str(telegram_id).strip()
     args = [
         t_id,
+        str(data.get('full_name', '')),
+        float(data.get('last_active', time.time())),
         float(data.get('balance', 0.0)),
         float(data.get('spend', 0.0)),
         float(data.get('due', 0.0)),
@@ -274,19 +288,26 @@ def save_user_db(telegram_id, data):
 
     if TURSO_URL and TURSO_TOKEN:
         stmt = '''
-            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO users (telegram_id, full_name, last_active, balance, spend, due, paid, purchases, due_logs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         '''
         execute_turso_query(stmt, args)
     else:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO users (telegram_id, full_name, last_active, balance, spend, due, paid, purchases, due_logs)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', args)
         conn.commit()
         conn.close()
+
+def update_user_activity(telegram_id, full_name=""):
+    u_data = get_user_db(telegram_id)
+    if full_name:
+        u_data['full_name'] = full_name
+    u_data['last_active'] = time.time()
+    save_user_db(telegram_id, u_data)
 
 US_STATES = [
     "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
@@ -358,6 +379,7 @@ def build_welcome_dashboard(user_first_name, telegram_id):
 # --- BUY NUMBER FLOW ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_number')
 def handle_buy_number_provider(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     balance = get_effective_balance(call.from_user.id)
     text = (
         f"📱 **BUY NUMBER**\n\n"
@@ -377,6 +399,7 @@ def handle_buy_number_provider(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'numprov_durian')
 def handle_durian_country_select(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     balance = get_effective_balance(call.from_user.id)
     text = (
         f"📱 **DURIANRCS**\n\n"
@@ -399,6 +422,7 @@ def handle_durian_country_select(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('numcountry_'))
 def handle_durian_service_select(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     country_code = call.data.split('_')[1]
     country_name = COUNTRY_CODES.get(country_code, 'United States')
     balance = get_effective_balance(call.from_user.id)
@@ -428,6 +452,7 @@ def handle_durian_service_select(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('numsrv_'))
 def handle_durian_quantity_select(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     parts = call.data.split('_')
     country_code = parts[1]
     service_name = parts[2]
@@ -475,6 +500,7 @@ def cancel_durian_number_api(order_id):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('numget_'))
 def handle_durian_get_numbers(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     parts = call.data.split('_')
     country_code = parts[1]
     service_name = parts[2]
@@ -618,6 +644,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('numblock_'))
 def handle_manual_number_block(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     parts = call.data.split('_')
     order_id = parts[1]
     num_str = parts[2]
@@ -704,6 +731,7 @@ def generate_due_query_text(telegram_id):
 # --- BUY PROXY FLOW ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_proxy')
 def handle_buy_proxy(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     text = "🌐 **BUY PROXY**\n\nChoose a provider:"
     markup = types.InlineKeyboardMarkup(row_width=1)
     
@@ -720,6 +748,7 @@ def handle_buy_proxy(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_cliproxy')
 def handle_cliproxy_states(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     balance = get_effective_balance(call.from_user.id)
 
     text = (
@@ -746,6 +775,7 @@ def handle_cliproxy_states(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('stateclip_'))
 def handle_state_quantity(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     state_code = call.data.split('_')[1]
     state_name = state_code.capitalize()
     
@@ -771,6 +801,7 @@ def handle_state_quantity(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_clip_'))
 def handle_buy_clip_confirm(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     parts = call.data.split('_')
     state_code = parts[2].lower()
     state_name = parts[2].capitalize()
@@ -832,7 +863,7 @@ def handle_buy_clip_confirm(call):
     purchase_log = {
         'date': bd_date_str,
         'time': bd_time.strftime("%I:%M %p").lower(),
-        'state': f"🌐 Cliproxy ({state_name})",  # Cliproxy-এ সঠিক ইমোজি যুক্ত করা হলো
+        'state': f"🌐 Cliproxy ({state_name})",
         'quantity': quantity,
         'cost': cost
     }
@@ -890,6 +921,7 @@ def handle_buy_clip_confirm(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'prov_711proxy')
 def handle_711proxy_states(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     balance = get_effective_balance(call.from_user.id)
 
     text = (
@@ -916,6 +948,7 @@ def handle_711proxy_states(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('state711_'))
 def handle_711_quantity(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     state_code = call.data.split('_')[1]
     state_name = state_code.capitalize()
     
@@ -941,6 +974,7 @@ def handle_711_quantity(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_711_'))
 def handle_buy_711_confirm(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     parts = call.data.split('_')
     state_code = parts[2].lower()
     state_name = parts[2].capitalize()
@@ -1028,6 +1062,7 @@ def handle_buy_711_confirm(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'due_query')
 def handle_user_due_query(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     text, markup = generate_due_query_text(call.from_user.id)
     try:
         bot.edit_message_text(
@@ -1043,6 +1078,7 @@ def handle_user_due_query(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('historypage_') or call.data == 'user_history')
 def handle_user_history(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     if call.data == 'user_history':
         page = 1
     else:
@@ -1117,9 +1153,117 @@ def handle_admin_dashboard(message):
         "`/paid <user_id> <YYYY-MM-DD> <amount>` - Clear/Adjust payment\n"
         "`/due <user_id>` - View user due query\n"
         "`/history <user_id>` - View user purchase history\n"
+        "`/userid` - View all active/registered users leaderboard\n"
         "`/adddue <user_id> <amount>` - Directly add due"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
+
+# --- ADMIN /userid COMMAND WITH LEADERBOARD STYLE PAGINATION ---
+def get_all_users_from_db():
+    if TURSO_URL and TURSO_TOKEN:
+        res = execute_turso_query("SELECT telegram_id, full_name, last_active FROM users")
+        users = []
+        if res and res.get("rows"):
+            for row in res["rows"]:
+                t_id = row[0].get("value")
+                f_name = row[1].get("value", "Unknown")
+                l_act = float(row[2].get("value", 0.0) or 0.0)
+                users.append({'telegram_id': t_id, 'full_name': f_name, 'last_active': l_act})
+        return users
+    else:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_id, full_name, last_active FROM users")
+        rows = cursor.fetchall()
+        conn.close()
+        users = []
+        for r in rows:
+            users.append({'telegram_id': r[0], 'full_name': r[1] or "Unknown", 'last_active': float(r[2] or 0.0)})
+        return users
+
+def format_time_diff(last_active_timestamp):
+    if not last_active_timestamp:
+        return "Never"
+    diff = int(time.time() - last_active_timestamp)
+    if diff < 60:
+        return f"{diff} seconds ago"
+    elif diff < 3600:
+        m = diff // 60
+        return f"{m} minutes ago"
+    elif diff < 86400:
+        h = diff // 3600
+        return f"{h} hours ago"
+    else:
+        d = diff // 86400
+        return f"{d} days ago"
+
+@bot.message_handler(commands=['userid'])
+def handle_admin_userid_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    send_userid_page(message.chat.id, page=1, message_id=None)
+
+def send_userid_page(chat_id, page, message_id=None):
+    all_users = get_all_users_from_db()
+    all_users.sort(key=lambda x: x['last_active'], reverse=True)
+
+    if not all_users:
+        text = "👥 **USER LIST**\n\n❌ কোনো ইউজার পাওয়া যায়নি।"
+        if message_id:
+            try:
+                bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown')
+            except Exception:
+                pass
+        else:
+            bot.send_message(chat_id, text, parse_mode='Markdown')
+        return
+
+    items_per_page = 10
+    total_items = len(all_users)
+    total_pages = (total_items + items_per_page - 1) // items_per_page
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * items_per_page
+    end_idx = start_idx + items_per_page
+    page_items = all_users[start_idx:end_idx]
+
+    text = f"👥 **REGISTERED USERS (Page {page}/{total_pages})**\n\n"
+    for idx, usr in enumerate(page_items, start=start_idx+1):
+        active_str = format_time_diff(usr['last_active'])
+        text += (
+            f"{idx}. Name: {usr['full_name']}\n"
+            f"   ID: `{usr['telegram_id']}`\n"
+            f"   Active: {active_str}\n"
+            f"----------------------------------------\n"
+        )
+
+    markup = types.InlineKeyboardMarkup()
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"userlist_{page - 1}"))
+    if page < total_pages:
+        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"userlist_{page + 1}"))
+
+    if nav_buttons:
+        markup.row(*nav_buttons)
+
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown', reply_markup=markup)
+        except Exception:
+            pass
+    else:
+        bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('userlist_'))
+def handle_userlist_pagination(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    page = int(call.data.split('_')[1])
+    send_userid_page(call.message.chat.id, page, message_id=call.message.message_id)
+    bot.answer_callback_query(call.id)
 
 # --- ADMIN HISTORY COMMAND & PAGINATION ---
 @bot.message_handler(commands=['history'])
@@ -1337,6 +1481,7 @@ def handle_add_due(message):
 # --- REQUEST BALANCE ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
 def handle_request_balance(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     admin_states[call.from_user.id] = 'waiting_for_request_amount'
     
     markup = types.InlineKeyboardMarkup()
@@ -1347,6 +1492,7 @@ def handle_request_balance(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_request')
 def handle_cancel_request(call):
+    update_user_activity(call.from_user.id, call.from_user.first_name or "Unknown")
     admin_states.pop(call.from_user.id, None)
     try:
         bot.edit_message_text(
@@ -1360,6 +1506,7 @@ def handle_cancel_request(call):
 
 @bot.message_handler(func=lambda msg: admin_states.get(msg.from_user.id) == 'waiting_for_request_amount')
 def process_request_amount(message):
+    update_user_activity(message.from_user.id, message.from_user.first_name or "Unknown")
     admin_states.pop(message.from_user.id, None)
     amount = message.text.strip()
     
@@ -1379,15 +1526,25 @@ def process_request_amount(message):
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    uid = message.from_user.id
+    first_name = message.from_user.first_name or "User"
+    last_name = message.from_user.last_name or ""
+    full_name = f"{first_name} {last_name}".strip() or "Unknown"
+    
+    # ইউজারের অ্যাক্টিভিটি এবং নাম আপডেট করা হচ্ছে
+    update_user_activity(uid, full_name)
+
     active_messages.pop(message.chat.id, None)
-    user_name = message.from_user.first_name or "User"
-    welcome_text, markup = build_welcome_dashboard(user_name, message.from_user.id)
+    welcome_text, markup = build_welcome_dashboard(first_name, uid)
     bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
+    uid = call.from_user.id
+    update_user_activity(uid, call.from_user.first_name or "Unknown")
+    
     active_messages.pop(call.message.chat.id, None)
-    welcome_text, markup = build_welcome_dashboard(call.message.from_user.first_name or "User", call.message.chat.id)
+    welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", uid)
     
     try:
         if call.message.content_type == 'photo':
