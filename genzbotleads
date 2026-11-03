@@ -1,6 +1,7 @@
 import os
 import time
 import io
+import html
 import threading
 import json
 import random
@@ -354,6 +355,191 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     markup.add(btn_due_query, btn_history)
     
     return welcome_text, markup
+
+# ==================== USER ACCESS APPROVAL SYSTEM ====================
+REQUEST_RESEND_SECONDS = 5 * 60        # admin কিছু না করলে ৫ মিনিট পর আবার request
+REJECT_COOLDOWN_SECONDS = 24 * 60 * 60 # cancel করলে ২৪ ঘণ্টা cooldown
+
+def db_run(stmt, args=None):
+    """Turso ও SQLite দুটোতেই কাজ করে। rows এর লিস্ট রিটার্ন করে, error হলে None।"""
+    if TURSO_URL and TURSO_TOKEN:
+        result = execute_turso_query(stmt, args)
+        if result is None:
+            return None
+        return [[c.get("value") for c in row] for row in result.get("rows", [])]
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        cur = conn.cursor()
+        cur.execute(stmt, args or [])
+        rows = cur.fetchall()
+        conn.commit()
+        return [list(r) for r in rows]
+    finally:
+        conn.close()
+
+db_run('''
+    CREATE TABLE IF NOT EXISTS access (
+        telegram_id TEXT PRIMARY KEY,
+        status TEXT,
+        full_name TEXT,
+        wait_until INTEGER DEFAULT 0
+    )
+''')
+
+def set_access(uid, status, full_name, wait_until=0):
+    db_run(
+        "INSERT OR REPLACE INTO access (telegram_id, status, full_name, wait_until) VALUES (?, ?, ?, ?)",
+        [str(uid), status, full_name, int(wait_until)]
+    )
+
+def get_access(uid):
+    uid = str(uid)
+    rows = db_run("SELECT status, full_name, wait_until FROM access WHERE telegram_id = ?", [uid])
+    if rows is None:
+        return {'status': 'error', 'full_name': '', 'wait_until': 0}
+    if rows:
+        return {'status': rows[0][0], 'full_name': rows[0][1] or '', 'wait_until': int(rows[0][2] or 0)}
+
+    # আগে থেকে যারা users টেবিলে আছে তাদের অটো approved ধরা হবে
+    old = db_run("SELECT 1 FROM users WHERE telegram_id = ?", [uid])
+    if old:
+        set_access(uid, 'approved', '', 0)
+        return {'status': 'approved', 'full_name': '', 'wait_until': 0}
+
+    return {'status': 'none', 'full_name': '', 'wait_until': 0}
+
+def is_approved(uid):
+    if int(uid) == ADMIN_ID:
+        return True
+    return get_access(uid)['status'] == 'approved'
+
+def fmt_remaining(seconds):
+    seconds = max(0, int(seconds))
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    if h > 0:
+        return f"{h}h {m}m"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+def send_access_request(user):
+    uid = str(user.id)
+    full_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "Unknown"
+    set_access(uid, 'pending', full_name, int(time.time()) + REQUEST_RESEND_SECONDS)
+
+    text = (
+        "📥 <b>NEW USER REQUEST</b>\n\n"
+        f"👤 Name: {html.escape(full_name)}\n"
+        f"🆔 User ID: <code>{uid}</code>"
+    )
+    if user.username:
+        text += f"\n🔗 Username: @{html.escape(user.username)}"
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Accept✅", callback_data=f"acc_ok_{uid}"),
+        types.InlineKeyboardButton("Cancel🚫", callback_data=f"acc_no_{uid}")
+    )
+    bot.send_message(ADMIN_ID, text, parse_mode='HTML', reply_markup=markup)
+    bot.send_message(user.id, "⏳ Your request has been sent to the admin.")
+
+# --- Not approved ইউজারদের ব্লক (এগুলো সবার আগে থাকতে হবে) ---
+@bot.callback_query_handler(func=lambda call: call.from_user.id != ADMIN_ID and not is_approved(call.from_user.id))
+def block_unapproved_callback(call):
+    bot.answer_callback_query(call.id, text="❌ You are not approved. Send /start to request access.", show_alert=True)
+
+@bot.message_handler(func=lambda m: m.from_user.id != ADMIN_ID
+                     and not (m.text or '').startswith('/start')
+                     and not is_approved(m.from_user.id))
+def block_unapproved_message(message):
+    bot.reply_to(message, "❌ You are not approved yet. Send /start to request access.")
+
+# --- /start ---
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    user = message.from_user
+    active_messages.pop(message.chat.id, None)
+
+    if is_approved(user.id):
+        welcome_text, markup = build_welcome_dashboard(user.first_name or "User", user.id)
+        bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
+        return
+
+    acc = get_access(user.id)
+    now = int(time.time())
+
+    if acc['status'] == 'error':
+        bot.send_message(message.chat.id, "⚠️ Something went wrong. Please try again later.")
+        return
+
+    if acc['status'] == 'rejected' and now < acc['wait_until']:
+        bot.send_message(
+            message.chat.id,
+            f"🚫 Your request was not approved by admin.\nTry again after {fmt_remaining(acc['wait_until'] - now)}."
+        )
+        return
+
+    if acc['status'] == 'pending' and now < acc['wait_until']:
+        bot.send_message(
+            message.chat.id,
+            f"⏳ Your request is already sent to the admin.\nYou can send a new request after {fmt_remaining(acc['wait_until'] - now)}."
+        )
+        return
+
+    # status none, অথবা cooldown শেষ -> নতুন request
+    send_access_request(user)
+
+# --- Admin: Accept / Cancel ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('acc_'))
+def handle_access_decision(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+
+    _, action, uid = call.data.split('_', 2)
+    acc = get_access(uid)
+
+    if acc['status'] != 'pending':
+        bot.answer_callback_query(call.id, text=f"Already handled ({acc['status']}).", show_alert=True)
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    base_text = call.message.html_text or ""
+
+    if action == 'ok':
+        set_access(uid, 'approved', acc['full_name'], 0)
+        try:
+            bot.edit_message_text(base_text + "\n\n✅ <b>Accepted</b>", chat_id=call.message.chat.id,
+                                  message_id=call.message.message_id, parse_mode='HTML')
+        except Exception:
+            pass
+
+        first_name = (acc['full_name'].split() or ["User"])[0]
+        try:
+            bot.send_message(int(uid), "🎉 Welcome to Genzbot !")
+            welcome_text, markup = build_welcome_dashboard(first_name, uid)
+            bot.send_message(int(uid), welcome_text, parse_mode='Markdown', reply_markup=markup)
+        except Exception as e:
+            print(f"Notify approved user error: {e}")
+        bot.answer_callback_query(call.id, text="User Accepted ✅")
+    else:
+        set_access(uid, 'rejected', acc['full_name'], int(time.time()) + REJECT_COOLDOWN_SECONDS)
+        try:
+            bot.edit_message_text(base_text + "\n\n🚫 <b>Cancelled</b>", chat_id=call.message.chat.id,
+                                  message_id=call.message.message_id, parse_mode='HTML')
+        except Exception:
+            pass
+        try:
+            bot.send_message(int(uid), "❌ Your request is not approved by admin.")
+        except Exception as e:
+            print(f"Notify rejected user error: {e}")
+        bot.answer_callback_query(call.id, text="User Cancelled 🚫")
+# ==================== END ACCESS APPROVAL SYSTEM ====================
 
 # --- BUY NUMBER FLOW ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_buy_number')
@@ -1377,17 +1563,10 @@ def process_request_amount(message):
     )
     bot.send_message(ADMIN_ID, admin_text, parse_mode='Markdown')
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    active_messages.pop(message.chat.id, None)
-    user_name = message.from_user.first_name or "User"
-    welcome_text, markup = build_welcome_dashboard(user_name, message.from_user.id)
-    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
-
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
     active_messages.pop(call.message.chat.id, None)
-    welcome_text, markup = build_welcome_dashboard(call.message.from_user.first_name or "User", call.message.chat.id)
+    welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.from_user.id)
     
     try:
         if call.message.content_type == 'photo':
