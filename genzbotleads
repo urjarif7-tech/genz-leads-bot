@@ -319,14 +319,25 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     
     uid = str(telegram_id)
     u_data = get_user_db(uid)
-    daily_spend = u_data['spend']
+    
+    # আজকের দিনের স্পেন্ড হিসাব করার লজিক (রাত ১২ টার পর অটো রিসেট হবে)
+    bd_now = datetime.utcnow() + timedelta(hours=6)
+    today_date_str = bd_now.strftime("%Y-%m-%d")
+    today_date_str_alt = bd_now.strftime("%d/%m/%Y")
+    
+    today_spend = 0.0
+    for entry in u_data.get('due_logs', []):
+        entry_date = entry.get('date', '')
+        if entry_date == today_date_str or entry_date == today_date_str_alt:
+            today_spend += float(entry.get('price', 0.0))
+
     balance = get_effective_balance(telegram_id)
 
     welcome_text = (
         f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
         f"📥 `Daily Earnings: {api_daily_earnings} TK`\n"
         f"────────────────────────\n"
-        f"📤 `Daily Spend: {daily_spend} TK`\n"
+        f"📤 `Daily Spend: {today_spend} TK`\n"
         f"────────────────────────\n"
         f"💳 `Balance: {balance} TK`"
     )
@@ -529,14 +540,24 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         u_data['due'] += price
 
         bd_time = datetime.utcnow() + timedelta(hours=6)
+        bd_date_str = bd_time.strftime("%Y-%m-%d")
+        
         purchase_log = {
-            'date': bd_time.strftime("%d/%m/%Y"),
+            'date': bd_date_str,
             'time': bd_time.strftime("%I:%M %p").lower(),
             'state': f"📱 {service_name} Number",
             'quantity': 1,
             'cost': price
         }
         u_data['purchases'].insert(0, purchase_log)
+        
+        # due_logs এ আজকের তারিখ দিয়ে এন্ট্রি যোগ করা যাতে Daily Spend সঠিকভাবে ট্র্যাক হয়
+        u_data['due_logs'].append({
+            'date': bd_date_str,
+            'price': price,
+            'paid': 0.0
+        })
+        
         save_user_db(uid, u_data)
 
         rem_bal = get_effective_balance(user_id)
@@ -808,14 +829,23 @@ def handle_buy_clip_confirm(call):
     u_data['due'] += cost
 
     bd_time = datetime.utcnow() + timedelta(hours=6)
+    bd_date_str = bd_time.strftime("%Y-%m-%d")
+    
     purchase_log = {
-        'date': bd_time.strftime("%d/%m/%Y"),
+        'date': bd_date_str,
         'time': bd_time.strftime("%I:%M %p").lower(),
         'state': f"Cliproxy ({state_name})",
         'quantity': quantity,
         'cost': cost
     }
     u_data['purchases'].insert(0, purchase_log)
+    
+    u_data['due_logs'].append({
+        'date': bd_date_str,
+        'price': cost,
+        'paid': 0.0
+    })
+    
     save_user_db(uid, u_data)
 
     proxy_display_text = "\n".join(proxy_urls_list)
@@ -939,14 +969,23 @@ def handle_buy_711_confirm(call):
     u_data['due'] += cost
 
     bd_time = datetime.utcnow() + timedelta(hours=6)
+    bd_date_str = bd_time.strftime("%Y-%m-%d")
+    
     purchase_log = {
-        'date': bd_time.strftime("%d/%m/%Y"),
+        'date': bd_date_str,
         'time': bd_time.strftime("%I:%M %p").lower(),
         'state': f"🚀 711 Proxy ({state_name})",
         'quantity': quantity,
         'cost': cost
     }
     u_data['purchases'].insert(0, purchase_log)
+    
+    u_data['due_logs'].append({
+        'date': bd_date_str,
+        'price': cost,
+        'paid': 0.0
+    })
+    
     save_user_db(uid, u_data)
 
     proxy_display_text = "\n".join(proxy_urls_list)
@@ -1334,4 +1373,4 @@ if __name__ == '__main__':
             bot.infinity_polling(none_stop=True, interval=1, timeout=20)
         except Exception as e:
             print(f"Polling Error: {e}")
-            time.sleep(3) 
+            time.sleep(3)
