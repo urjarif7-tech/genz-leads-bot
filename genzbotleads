@@ -320,7 +320,6 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     uid = str(telegram_id)
     u_data = get_user_db(uid)
     
-    # আজকের দিনের স্পেন্ড হিসাব করার লজিক (রাত ১২ টার পর অটো রিসেট হবে)
     bd_now = datetime.utcnow() + timedelta(hours=6)
     today_date_str = bd_now.strftime("%Y-%m-%d")
     today_date_str_alt = bd_now.strftime("%d/%m/%Y")
@@ -551,7 +550,6 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         }
         u_data['purchases'].insert(0, purchase_log)
         
-        # due_logs এ আজকের তারিখ দিয়ে এন্ট্রি যোগ করা যাতে Daily Spend সঠিকভাবে ট্র্যাক হয়
         u_data['due_logs'].append({
             'date': bd_date_str,
             'price': price,
@@ -834,7 +832,7 @@ def handle_buy_clip_confirm(call):
     purchase_log = {
         'date': bd_date_str,
         'time': bd_time.strftime("%I:%M %p").lower(),
-        'state': f"Cliproxy ({state_name})",
+        'state': f"🌐 Cliproxy ({state_name})",  # Cliproxy-এ সঠিক ইমোজি যুক্ত করা হলো
         'quantity': quantity,
         'cost': cost
     }
@@ -1123,6 +1121,7 @@ def handle_admin_dashboard(message):
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
+# --- ADMIN HISTORY COMMAND & PAGINATION ---
 @bot.message_handler(commands=['history'])
 def handle_admin_history_cmd(message):
     if message.from_user.id != ADMIN_ID:
@@ -1131,25 +1130,79 @@ def handle_admin_history_cmd(message):
     try:
         args = message.text.split()
         target_user = args[1]
-        
-        u_data = get_user_db(target_user)
-        history_list = u_data['purchases']
-        
-        if not history_list:
-            bot.send_message(message.chat.id, f"📜 User `{target_user}` has no purchase history.", parse_mode='Markdown')
-            return
-
-        hist_text = f"📜 **PURCHASE HISTORY FOR {target_user}**\n\n"
-        for item in history_list[:10]:
-            hist_text += (
-                f"Date : {item.get('date', 'N/A')}\n"
-                f"Item : {item.get('state', 'N/A')}\n"
-                f"Cost : {item.get('cost', 0)} TK\n"
-                f"----------------------------------------\n"
-            )
-        bot.send_message(message.chat.id, hist_text, parse_mode='Markdown')
+        send_admin_history_page(message.chat.id, target_user, page=1, message_id=None)
     except Exception:
         bot.reply_to(message, "⚠️ Usage: `/history <user_id>`\nExample: `/history 5763930051`", parse_mode='Markdown')
+
+def send_admin_history_page(chat_id, target_user, page, message_id=None):
+    u_data = get_user_db(target_user)
+    history_list = u_data['purchases']
+    
+    if not history_list:
+        text = f"📜 **PURCHASE HISTORY FOR {target_user}**\n\n❌ এই ইউজারের কোনো purchase history নেই।"
+        if message_id:
+            try:
+                bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown')
+            except Exception:
+                pass
+        else:
+            bot.send_message(chat_id, text, parse_mode='Markdown')
+        return
+
+    items_per_page = 5
+    total_items = len(history_list)
+    total_pages = min((total_items + items_per_page - 1) // items_per_page, 5)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * items_per_page
+    end_idx = start_idx + items_per_page
+    page_items = history_list[start_idx:end_idx]
+
+    text = f"📜 **PURCHASE HISTORY FOR {target_user} (Page {page}/{total_pages})**\n\n"
+    for item in page_items:
+        text += (
+            f"Date : {item.get('date', 'N/A')}\n"
+            f"Time : {item.get('time', 'N/A')}\n"
+            f"Item : {item.get('state', 'N/A')}\n"
+            f"Quantity : {item.get('quantity', 1)}    Cost : {item.get('cost', 0)} TK\n"
+            f"----------------------------------------\n"
+        )
+
+    total_spend = sum(float(item.get('cost', 0.0)) for item in history_list)
+    text += f"\nTotal Spend : {total_spend} TK"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"admhist_{target_user}_{page}"))
+
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"admhist_{target_user}_{page - 1}"))
+    if page < total_pages:
+        nav_buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"admhist_{target_user}_{page + 1}"))
+
+    if nav_buttons:
+        markup.row(*nav_buttons)
+
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown', reply_markup=markup)
+        except Exception:
+            pass
+    else:
+        bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admhist_'))
+def handle_admin_history_pagination(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+
+    parts = call.data.split('_')
+    target_user = parts[1]
+    page = int(parts[2])
+
+    send_admin_history_page(call.message.chat.id, target_user, page, message_id=call.message.message_id)
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(commands=['due'])
 def handle_admin_due_cmd(message):
