@@ -1348,7 +1348,8 @@ def handle_admin_dashboard(message):
         "`/due <user_id>` - View user due query\n"
         "`/history <user_id>` - View user purchase history\n"
         "`/adddue <user_id> <amount>` - Directly add due\n"
-        "`/userid` - All users list with last active time"
+        "`/userid` - All users list with last active time\n"
+        "`/kick <user_id>` - Remove user (must request /start again)"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -1668,21 +1669,72 @@ def build_users_page(page):
             f"🕒 {fmt_ago(last)}\n\n"
         )
 
+    buttons = []
+    if page > 1:
+        buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"usrpg_{page - 1}"))
+    buttons.append(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"usrpg_{page}"))
+    if page < total_pages:
+        buttons.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"usrpg_{page + 1}"))
+
     markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("⬅️ Prev", callback_data=f"usrpg_{page - 1}"),
-        types.InlineKeyboardButton("🔄 Refresh", callback_data=f"usrpg_{page}"),
-        types.InlineKeyboardButton("Next ➡️", callback_data=f"usrpg_{page + 1}")
-    )
+    markup.row(*buttons)
     return text, markup, page, total_pages
+
+USERID_AUTO_REFRESH_SECONDS = 15
+USERID_LIVE_TIMEOUT = 30 * 60   # ৩০ মিনিট কোনো বাটন না চাপলে auto-refresh বন্ধ (Turso/API লোড কমাতে)
+userid_live = {}                # (chat_id, message_id) -> {'page': n, 'last_touch': ts}
+userid_live_lock = threading.Lock()
+
+def register_userid_live(chat_id, message_id, page):
+    with userid_live_lock:
+        # প্রতি চ্যাটে শুধু সর্বশেষ /userid মেসেজটাই auto-refresh হবে
+        for key in [k for k in userid_live if k[0] == chat_id and k[1] != message_id]:
+            userid_live.pop(key, None)
+        userid_live[(chat_id, message_id)] = {'page': page, 'last_touch': time.time()}
+
+def userid_auto_refresh_loop():
+    while True:
+        time.sleep(USERID_AUTO_REFRESH_SECONDS)
+        try:
+            with userid_live_lock:
+                snapshot = list(userid_live.items())
+            now = time.time()
+            for key, info in snapshot:
+                chat_id, message_id = key
+                if now - info['last_touch'] > USERID_LIVE_TIMEOUT:
+                    with userid_live_lock:
+                        userid_live.pop(key, None)
+                    continue
+
+                text, markup, page, _ = build_users_page(info['page'])
+                try:
+                    bot.edit_message_text(text, chat_id=chat_id, message_id=message_id,
+                                          parse_mode='HTML', reply_markup=markup)
+                except Exception as e:
+                    err = str(e).lower()
+                    if 'not modified' in err:
+                        pass
+                    elif 'not found' in err or "can't be edited" in err or 'chat not found' in err:
+                        with userid_live_lock:
+                            userid_live.pop(key, None)  # মেসেজ ডিলিট হয়ে গেছে
+                    else:
+                        print(f"Userid auto-refresh error: {e}")
+
+                with userid_live_lock:
+                    cur = userid_live.get(key)
+                    if cur and cur['page'] == info['page']:
+                        cur['page'] = page
+        except Exception as e:
+            print(f"Userid refresh loop error: {e}")
 
 @bot.message_handler(commands=['userid'])
 def handle_userid_cmd(message):
     if message.from_user.id != ADMIN_ID:
         bot.reply_to(message, "❌ You are not authorized.")
         return
-    text, markup, _, _ = build_users_page(1)
-    bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+    text, markup, page, _ = build_users_page(1)
+    sent = bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+    register_userid_live(message.chat.id, sent.message_id, page)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('usrpg_'))
 def handle_userid_pagination(call):
@@ -1695,22 +1747,53 @@ def handle_userid_pagination(call):
     except Exception:
         req_page = 1
 
-    text, markup, page, total_pages = build_users_page(req_page)
-
-    if req_page < 1:
-        bot.answer_callback_query(call.id, text="This is the first page.")
-        return
-    if req_page > total_pages:
-        bot.answer_callback_query(call.id, text="This is the last page.")
-        return
+    text, markup, page, _ = build_users_page(req_page)
 
     try:
         bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
                               parse_mode='HTML', reply_markup=markup)
         bot.answer_callback_query(call.id)
     except Exception:
-        # Refresh চাপলে কিছু না বদলালে Telegram error দেয়, সেটা ignore
+        # কিছু না বদলালে Telegram error দেয়, সেটা ignore
         bot.answer_callback_query(call.id, text="Already up to date.")
+
+    register_userid_live(call.message.chat.id, call.message.message_id, page)
+
+# --- /kick <user_id> ---
+@bot.message_handler(commands=['kick'])
+def handle_kick_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        bot.reply_to(message, "⚠️ Usage: `/kick <user_id>`\nExample: `/kick 5763930051`", parse_mode='Markdown')
+        return
+
+    target = args[1]
+    if int(target) == ADMIN_ID:
+        bot.reply_to(message, "❌ You can't kick yourself.")
+        return
+
+    acc = get_access(target)
+    if acc['status'] == 'error':
+        bot.reply_to(message, "⚠️ Database error. Please try again.")
+        return
+    if acc['status'] != 'approved':
+        bot.reply_to(message, f"ℹ️ User `{target}` is not currently approved (status: {acc['status']}).", parse_mode='Markdown')
+        return
+
+    # row মুছলে পুরনো ইউজার আবার অটো approved হয়ে যেত, তাই status 'kicked' রাখা হয়েছে
+    set_access(target, 'kicked', acc['full_name'], 0)
+    admin_states.pop(int(target), None)
+
+    try:
+        bot.send_message(int(target), "🚫 You have been removed by admin.\nSend /start to request access again.")
+    except Exception:
+        pass
+
+    bot.reply_to(message, f"✅ User `{target}` has been kicked. They must send /start and get approved again.", parse_mode='Markdown')
 # ==================== END /userid ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
@@ -1741,6 +1824,7 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
+    threading.Thread(target=userid_auto_refresh_loop, daemon=True).start()
     
     try:
         bot.remove_webhook()
