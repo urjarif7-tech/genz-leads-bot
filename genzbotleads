@@ -166,7 +166,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id TEXT PRIMARY KEY,
                 full_name TEXT DEFAULT '',
-                status TEXT DEFAULT 'pending',
+                status TEXT DEFAULT 'approved',
                 last_request REAL DEFAULT 0.0,
                 last_active REAL DEFAULT 0.0,
                 balance REAL DEFAULT 0.0,
@@ -185,7 +185,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id TEXT PRIMARY KEY,
                 full_name TEXT DEFAULT '',
-                status TEXT DEFAULT 'pending',
+                status TEXT DEFAULT 'approved',
                 last_request REAL DEFAULT 0.0,
                 last_active REAL DEFAULT 0.0,
                 balance REAL DEFAULT 0.0,
@@ -210,7 +210,7 @@ def get_user_db(telegram_id):
         if result and result.get("rows"):
             row = result["rows"][0]
             val_name = row[0].get("value", "") or ""
-            val_status = row[1].get("value", "pending") or "pending"
+            val_status = row[1].get("value", "approved") or "approved"
             val_req = float(row[2].get("value", 0.0)) if row[2].get("value") is not None else 0.0
             val_act = float(row[3].get("value", 0.0)) if row[3].get("value") is not None else 0.0
             val_balance = float(row[4].get("value", 0.0)) if row[4].get("value") is not None else 0.0
@@ -260,7 +260,7 @@ def get_user_db(telegram_id):
 
             return {
                 'full_name': row[0] or "",
-                'status': row[1] or "pending",
+                'status': row[1] or "approved",
                 'last_request': float(row[2] or 0.0),
                 'last_active': float(row[3] or 0.0),
                 'balance': float(row[4] or 0.0),
@@ -273,7 +273,7 @@ def get_user_db(telegram_id):
 
     return {
         'full_name': "",
-        'status': "pending",
+        'status': "approved",
         'last_request': 0.0,
         'last_active': 0.0,
         'balance': 0.0,
@@ -289,7 +289,7 @@ def save_user_db(telegram_id, data):
     args = [
         t_id,
         str(data.get('full_name', '')),
-        str(data.get('status', 'pending')),
+        str(data.get('status', 'approved')),
         float(data.get('last_request', 0.0)),
         float(data.get('last_active', time.time())),
         float(data.get('balance', 0.0)),
@@ -390,108 +390,20 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     
     return welcome_text, markup
 
-# --- SECURITY / APPROVAL FLOW ---
+# --- NORMAL WELCOME (WITHOUT SECURITY) ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     uid = message.from_user.id
-    
-    if uid == ADMIN_ID:
-        update_user_activity(uid, message.from_user.first_name or "Admin")
-        active_messages.pop(message.chat.id, None)
-        welcome_text, markup = build_welcome_dashboard("Admin", uid)
-        bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
-        return
-
     first_name = message.from_user.first_name or ""
     last_name = message.from_user.last_name or ""
     full_name = f"{first_name} {last_name}".strip() or "Unknown"
     
+    # ইউজার যখনই /start দিবে, তার অ্যাক্টিভিটি টাইম ও ফুল নেম ডাটাবেজে সেভ হয়ে যাবে
     update_user_activity(uid, full_name)
     
-    u_data = get_user_db(uid)
-    status = u_data.get('status', 'pending')
-
-    # ইউজার একবার অ্যাপ্রুভ হয়ে গেলে আর কখনোই রিকোয়েস্ট চাইবে না, সোজা ড্যাশবোর্ড দেখাবে
-    if status == 'approved':
-        active_messages.pop(message.chat.id, None)
-        welcome_text, markup = build_welcome_dashboard(first_name, uid)
-        bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
-        return
-
-    # Cooldown Check
-    current_time = time.time()
-    last_req = u_data.get('last_request', 0.0)
-
-    if status == 'rejected':
-        if current_time - last_req < 86400:
-            rem_seconds = int(86400 - (current_time - last_req))
-            rem_hours = rem_seconds // 3600
-            rem_mins = (rem_seconds % 3600) // 60
-            bot.send_message(message.chat.id, f"❌ Your request is not approved by admin. You can request again after {rem_hours} hours {rem_mins} minutes.")
-            return
-        else:
-            u_data['status'] = 'pending'
-            save_user_db(uid, u_data)
-
-    elif status == 'pending' and last_req > 0:
-        if current_time - last_req < 300:
-            rem_mins = int((300 - (current_time - last_req)) // 60)
-            rem_secs = int((300 - (current_time - last_req)) % 60)
-            bot.send_message(message.chat.id, f"⏳ Your request is already pending. Please wait or try again after {rem_mins} minutes {rem_secs} seconds.")
-            return
-
-    u_data['last_request'] = current_time
-    save_user_db(uid, u_data)
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_accept = types.InlineKeyboardButton("Accept ✅", callback_data=f"sec_accept_{uid}")
-    btn_cancel = types.InlineKeyboardButton("Cancel 🚫", callback_data=f"sec_cancel_{uid}")
-    markup.add(btn_accept, btn_cancel)
-
-    admin_msg = (
-        f"🔐 **NEW USER APPROVAL REQUEST**\n\n"
-        f"👤 Name: {full_name}\n"
-        f"🆔 ID: `{uid}`"
-    )
-    bot.send_message(ADMIN_ID, admin_msg, parse_mode='Markdown', reply_markup=markup)
-    bot.send_message(message.chat.id, "Your request has been sent to the admin.")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('sec_'))
-def handle_security_action(call):
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
-        return
-
-    parts = call.data.split('_')
-    action = parts[1]
-    target_user = parts[2]
-    u_data = get_user_db(target_user)
-
-    if action == 'accept':
-        u_data['status'] = 'approved'
-        save_user_db(target_user, u_data)
-        try:
-            bot.edit_message_text(f"✅ Approved user `{target_user}` successfully.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown')
-        except Exception:
-            pass
-        try:
-            bot.send_message(target_user, "Welcome to Genzbot !")
-        except Exception:
-            pass
-        bot.answer_callback_query(call.id, text="User Approved!")
-
-    elif action == 'cancel':
-        u_data['status'] = 'rejected'
-        save_user_db(target_user, u_data)
-        try:
-            bot.edit_message_text(f"❌ Rejected user `{target_user}`.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown')
-        except Exception:
-            pass
-        try:
-            bot.send_message(target_user, "your request is not approved by admin.")
-        except Exception:
-            pass
-        bot.answer_callback_query(call.id, text="User Rejected!")
+    active_messages.pop(message.chat.id, None)
+    welcome_text, markup = build_welcome_dashboard(first_name, uid)
+    bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
 
 # --- ADMIN /userid COMMAND WITH LEADERBOARD STYLE PAGINATION ---
 def get_all_users_from_db():
@@ -605,10 +517,7 @@ def handle_userlist_pagination(call):
 def handle_buy_number_provider(call):
     uid = call.from_user.id
     update_user_activity(uid)
-    if uid != ADMIN_ID and get_user_db(uid).get('status') != 'approved':
-        bot.answer_callback_query(call.id, text="Access denied! Please send /start", show_alert=True)
-        return
-
+    
     balance = get_effective_balance(uid)
     text = (
         f"📱 **BUY NUMBER**\n\n"
@@ -967,10 +876,7 @@ def generate_due_query_text(telegram_id):
 def handle_buy_proxy(call):
     uid = call.from_user.id
     update_user_activity(uid)
-    if uid != ADMIN_ID and get_user_db(uid).get('status') != 'approved':
-        bot.answer_callback_query(call.id, text="Access denied! Please send /start", show_alert=True)
-        return
-
+    
     text = "🌐 **BUY PROXY**\n\nChoose a provider:"
     markup = types.InlineKeyboardMarkup(row_width=1)
     
@@ -1616,7 +1522,7 @@ def handle_add_due(message):
 
         bot.reply_to(message, f"🔴 Successfully added Due amount `{amount} TK` for User ID `{target_user}`!", parse_mode='Markdown')
     except Exception:
-        bot.reply_to(message, "⚠️ Usage: `/adddue <user_id> <amount>`", parse_mode='Markdown')
+        bot.reply_to(message, "⚠️ Usage: `/addadddue <user_id> <amount>`", parse_mode='Markdown')
 
 # --- REQUEST BALANCE ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
@@ -1653,7 +1559,7 @@ def process_request_amount(message):
     admin_states.pop(uid, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     first_name = message.from_user.first_name or ""
     last_name = message.from_user.last_name or ""
