@@ -411,7 +411,7 @@ def send_welcome(message):
     u_data = get_user_db(uid)
     status = u_data.get('status', 'pending')
 
-    # যদি ইউজার আগে থেকেই অ্যাপ্রুভ হয়ে থাকে, তবে সোজা মেনু দেখাবে
+    # ইউজার একবার অ্যাপ্রুভ হয়ে গেলে আর কখনোই রিকোয়েস্ট চাইবে না, সোজা ড্যাশবোর্ড দেখাবে
     if status == 'approved':
         active_messages.pop(message.chat.id, None)
         welcome_text, markup = build_welcome_dashboard(first_name, uid)
@@ -1653,7 +1653,7 @@ def process_request_amount(message):
     admin_states.pop(uid, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
     
     first_name = message.from_user.first_name or ""
     last_name = message.from_user.last_name or ""
