@@ -412,7 +412,7 @@ def track_activity(user):
     try:
         uid = str(user.id)
         now = int(time.time())
-        if now - _last_touch.get(uid, 0) >= 10:
+        if now - _last_touch.get(uid, 0) >= 5:
             _last_touch[uid] = now
             name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "Unknown"
             threading.Thread(target=_write_activity, args=(uid, name, now), daemon=True).start()
@@ -1612,6 +1612,7 @@ def process_request_amount(message):
 
 # ==================== ADMIN: /userid (ALL USERS + LAST ACTIVE) ====================
 USERS_PER_PAGE = 10
+ONLINE_WINDOW_SECONDS = 60   # শেষ ১ মিনিটে বট ব্যবহার করলে 🟢, নাহলে ⚪
 
 def fmt_ago(ts):
     if not ts:
@@ -1630,20 +1631,43 @@ def fmt_ago(ts):
     d = seconds // 86400
     return f"{d} day{'s' if d != 1 else ''} ago"
 
-def get_all_users_sorted():
-    users = {}
-    for r in (db_run("SELECT telegram_id, full_name FROM access") or []):
-        users[str(r[0])] = {'name': r[1] or '', 'last': 0}
-    for r in (db_run("SELECT telegram_id FROM users") or []):
-        users.setdefault(str(r[0]), {'name': '', 'last': 0})
-    for r in (db_run("SELECT telegram_id, full_name, last_active FROM activity") or []):
-        u = users.setdefault(str(r[0]), {'name': '', 'last': 0})
-        if r[1]:
-            u['name'] = r[1]
-        u['last'] = int(r[2] or 0)
+_users_cache = []
 
-    items = [(uid, d['name'] or 'Unknown', d['last']) for uid, d in users.items()]
+def get_all_users_sorted():
+    """শুধু approved (join করা) ইউজারদের তালিকা। kicked/pending/rejected দেখাবে না।"""
+    global _users_cache
+    access_rows = db_run("SELECT telegram_id, status, full_name FROM access")
+    old_rows = db_run("SELECT telegram_id FROM users")
+    act_rows = db_run("SELECT telegram_id, full_name, last_active FROM activity")
+    if access_rows is None or old_rows is None or act_rows is None:
+        return _users_cache  # ডাটাবেস সাময়িক error হলে আগের তালিকাই দেখাবে
+
+    access_ids = set()
+    approved = {}
+    for r in access_rows:
+        uid = str(r[0])
+        access_ids.add(uid)
+        if r[1] == 'approved':
+            approved[uid] = {'name': r[2] or '', 'last': 0}
+
+    # access টেবিলে নেই কিন্তু users টেবিলে আছে = পুরনো ইউজার (অটো approved)
+    for r in old_rows:
+        uid = str(r[0])
+        if uid not in access_ids:
+            approved.setdefault(uid, {'name': '', 'last': 0})
+
+    approved.setdefault(str(ADMIN_ID), {'name': '', 'last': 0})
+
+    for r in act_rows:
+        uid = str(r[0])
+        if uid in approved:
+            if r[1]:
+                approved[uid]['name'] = r[1]
+            approved[uid]['last'] = int(r[2] or 0)
+
+    items = [(uid, d['name'] or 'Unknown', d['last']) for uid, d in approved.items()]
     items.sort(key=lambda x: x[2], reverse=True)  # সবচেয়ে সাম্প্রতিক active আগে
+    _users_cache = items
     return items
 
 def build_users_page(page):
@@ -1662,7 +1686,7 @@ def build_users_page(page):
     if not page_items:
         text += "❌ No users found."
     for i, (uid, name, last) in enumerate(page_items, start=start + 1):
-        icon = "🟢" if last and (now - last) < 300 else "⚪"
+        icon = "🟢" if last and (now - last) < ONLINE_WINDOW_SECONDS else "⚪"
         text += (
             f"<b>{i}.</b> {icon} {html.escape(name)}\n"
             f"🆔 <code>{uid}</code>\n"
