@@ -409,6 +409,7 @@ def send_welcome(message):
     u_data = get_user_db(uid)
     status = u_data.get('status', 'pending')
 
+    # যদি ইউজার আগে থেকেই অ্যাপ্রুভ হয়ে থাকে, তবে সোজা মেনু দেখাবে
     if status == 'approved':
         active_messages.pop(message.chat.id, None)
         welcome_text, markup = build_welcome_dashboard(first_name, uid)
@@ -420,23 +421,26 @@ def send_welcome(message):
     last_req = u_data.get('last_request', 0.0)
 
     if status == 'rejected':
-        # 24 Hours Cooldown for rejection
+        # 24 Hours Cooldown for rejection (86400 seconds)
         if current_time - last_req < 86400:
-            rem_hours = int((86400 - (current_time - last_req)) // 3600)
-            bot.send_message(message.chat.id, f"❌ Your request is not approved by admin. You can request again after {rem_hours} hours.")
+            rem_seconds = int(86400 - (current_time - last_req))
+            rem_hours = rem_seconds // 3600
+            rem_mins = (rem_seconds % 3600) // 60
+            bot.send_message(message.chat.id, f"❌ Your request is not approved by admin. You can request again after {rem_hours} hours {rem_mins} minutes.")
             return
         else:
             u_data['status'] = 'pending'
             save_user_db(uid, u_data)
 
     elif status == 'pending' and last_req > 0:
-        # 5 Minutes Cooldown for pending request
+        # 5 Minutes Cooldown for pending request (300 seconds)
         if current_time - last_req < 300:
             rem_mins = int((300 - (current_time - last_req)) // 60)
-            bot.send_message(message.chat.id, f"⏳ Your request is already pending. Please wait or try again after {rem_mins} minutes.")
+            rem_secs = int((300 - (current_time - last_req)) % 60)
+            bot.send_message(message.chat.id, f"⏳ Your request is already pending. Please wait or try again after {rem_mins} minutes {rem_secs} seconds.")
             return
 
-    # Send Request to Admin
+    # Send Request to Admin and Update last_request time
     u_data['last_request'] = current_time
     save_user_db(uid, u_data)
 
@@ -490,23 +494,6 @@ def handle_security_action(call):
             pass
         bot.answer_callback_query(call.id, text="User Rejected!")
 
-# --- USER ACTIVITY MIDDLEWARE SIMULATION / DECORATOR CHECK ---
-def check_approved_user(func):
-    def wrapper(call_or_message):
-        uid = call_or_message.from_user.id
-        if uid == ADMIN_ID:
-            return func(call_or_message)
-        update_user_activity(uid)
-        u_data = get_user_db(uid)
-        if u_data.get('status') != 'approved':
-            if isinstance(call_or_message, types.CallbackQuery):
-                bot.answer_callback_query(call_or_message.id, text="Please send /start and get approved first!", show_alert=True)
-            else:
-                bot.send_message(call_or_message.chat.id, "Please send /start to request access.")
-            return
-        return func(call_or_message)
-    return wrapper
-
 # --- ADMIN /userid COMMAND WITH LEADERBOARD STYLE PAGINATION ---
 def get_all_users_from_db():
     if TURSO_URL and TURSO_TOKEN:
@@ -555,7 +542,6 @@ def handle_admin_userid_cmd(message):
 
 def send_userid_page(chat_id, page, message_id=None):
     all_users = get_all_users_from_db()
-    # Sort by active time descending (most recent first)
     all_users.sort(key=lambda x: x['last_active'], reverse=True)
 
     if not all_users:
@@ -1668,7 +1654,7 @@ def process_request_amount(message):
     admin_states.pop(uid, None)
     amount = message.text.strip()
     
-    bot.reply_to(message, f"✅ Apnar {amount} TK add korار request admin er kache pathano hoyeche!")
+    bot.reply_to(message, f"✅ Apnar {amount} TK add korar request admin er kache pathano hoyeche!")
     
     first_name = message.from_user.first_name or ""
     last_name = message.from_user.last_name or ""
