@@ -353,6 +353,7 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     markup.add(btn_buy_proxy, btn_buy_number)
     markup.add(btn_leads, btn_request)
     markup.add(btn_due_query, btn_history)
+    markup.add(types.InlineKeyboardButton("👤 Profile", callback_data="menu_profile"))
     
     return welcome_text, markup
 
@@ -421,11 +422,11 @@ def track_activity(user):
     return False
 
 # এই দুটো সবার আগে রেজিস্টার হতে হবে (প্রতিটি message/button চাপে activity সেভ করে)
-@bot.message_handler(func=lambda m: track_activity(m.from_user))
+@bot.message_handler(func=lambda m: track_activity(m.from_user) or _clear_flows_msg(m))
 def _activity_tracker_message(message):
     pass
 
-@bot.callback_query_handler(func=lambda c: track_activity(c.from_user))
+@bot.callback_query_handler(func=lambda c: track_activity(c.from_user) or _clear_flows_cb(c))
 def _activity_tracker_callback(call):
     pass
 # ---------- END ACTIVITY TRACKER ----------
@@ -1350,7 +1351,8 @@ def handle_admin_dashboard(message):
         "`/adddue <user_id> <amount>` - Directly add due\n"
         "`/userid` - All users list with last active time\n"
         "`/kick <user_id>` - Remove user (must request /start again)\n"
-        "`/broadcast <user_id|all>` - Send a message to one user or everyone"
+        "`/broadcast <user_id|all>` - Send a message to one user or everyone\n"
+        "`/bank <user_id>` - View user bank details"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -1845,6 +1847,10 @@ def send_broadcast_to(uid, from_chat_id, msg):
                 bot.send_message(int(uid), msg.text)
             else:
                 return False
+            try:
+                save_broadcast(uid, msg)
+            except Exception as se:
+                print(f"Save broadcast error: {se}")
             return True
         except Exception as e:
             if '429' in str(e) and attempt == 0:
@@ -1958,6 +1964,434 @@ def handle_broadcast_content(message):
             )
 # ==================== END /broadcast ====================
 
+
+
+# ==================== PROFILE MENU (Pay Due / Add Bank / Broadcasts) ====================
+import math
+
+paydue_states = {}   # user_id -> {'chat_id': .., 'msg_id': ..}
+bank_states = {}     # user_id -> {'step': n, 'data': {...}, 'chat_id': .., 'msg_id': ..}
+
+BANK_FIELDS = [
+    ('bank_name', 'Bank Name'),
+    ('account_name', 'Account Name'),
+    ('account_number', 'Account Number'),
+    ('division', 'Division'),
+    ('branch', 'Branch'),
+    ('bkash_number', 'Bkash Number'),
+]
+
+db_run('''
+    CREATE TABLE IF NOT EXISTS bank (
+        telegram_id TEXT PRIMARY KEY,
+        bank_name TEXT,
+        account_name TEXT,
+        account_number TEXT,
+        division TEXT,
+        branch TEXT,
+        bkash_number TEXT
+    )
+''')
+
+db_run('''
+    CREATE TABLE IF NOT EXISTS broadcasts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id TEXT,
+        ts INTEGER,
+        content_type TEXT,
+        body TEXT
+    )
+''')
+
+def clear_user_flows(uid):
+    admin_states.pop(uid, None)
+    paydue_states.pop(uid, None)
+    bank_states.pop(uid, None)
+
+def _clear_flows_cb(c):
+    # অন্য যেকোনো বাটন চাপলে অসম্পূর্ণ ইনপুট (Pay Due / Bank / Request Balance) বাতিল হয়
+    if c.data != 'bank_back':
+        clear_user_flows(c.from_user.id)
+    return False
+
+def _clear_flows_msg(m):
+    if (m.text or '').startswith('/'):
+        clear_user_flows(m.from_user.id)
+    return False
+
+def show_page(call, text, markup, parse_mode='HTML'):
+    try:
+        if call.message.content_type == 'photo':
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            bot.send_message(call.message.chat.id, text, parse_mode=parse_mode, reply_markup=markup)
+        else:
+            bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                  parse_mode=parse_mode, reply_markup=markup)
+    except Exception as e:
+        if 'not modified' not in str(e).lower():
+            bot.send_message(call.message.chat.id, text, parse_mode=parse_mode, reply_markup=markup)
+
+def fmt_amt(v):
+    v = float(v)
+    return str(int(v)) if v.is_integer() else f"{v:.2f}".rstrip('0').rstrip('.')
+
+def parse_amount(text):
+    try:
+        t = (text or '').replace(',', '').strip().lower()
+        if t.endswith('tk'):
+            t = t[:-2].strip()
+        v = float(t)
+    except Exception:
+        return None
+    if not math.isfinite(v) or v <= 0 or v > 10000000:
+        return None
+    return v
+
+def fmt_bd_time(ts):
+    return (datetime.utcfromtimestamp(int(ts)) + timedelta(hours=6)).strftime("%Y-%m-%d %I:%M %p")
+
+def get_user_name(uid):
+    rows = db_run("SELECT full_name FROM activity WHERE telegram_id = ?", [str(uid)])
+    if rows and rows[0][0]:
+        return rows[0][0]
+    rows = db_run("SELECT full_name FROM access WHERE telegram_id = ?", [str(uid)])
+    if rows and rows[0][0]:
+        return rows[0][0]
+    return "Unknown"
+
+# ---------- Profile menu ----------
+def build_profile_menu():
+    text = "👤 <b>PROFILE</b>\n\nChoose an option:"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🧾 Pay Due", callback_data="prof_paydue"),
+        types.InlineKeyboardButton("🏦 Add Bank", callback_data="prof_bank")
+    )
+    markup.add(types.InlineKeyboardButton("📢 Broadcasts", callback_data="userbc_1"))
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    return text, markup
+
+def profile_back_markup():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+    return markup
+
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_profile')
+def handle_profile_menu(call):
+    text, markup = build_profile_menu()
+    show_page(call, text, markup)
+    bot.answer_callback_query(call.id)
+
+# ---------- 1) Pay Due ----------
+@bot.callback_query_handler(func=lambda call: call.data == 'prof_paydue')
+def handle_paydue_start(call):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="paydue_cancel"))
+    show_page(call, "💰 How much do you pay?", markup)
+    paydue_states[call.from_user.id] = {'chat_id': call.message.chat.id, 'msg_id': call.message.message_id}
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'paydue_cancel')
+def handle_paydue_cancel(call):
+    paydue_states.pop(call.from_user.id, None)
+    show_page(call, "❌ Payment request cancelled.", profile_back_markup())
+    bot.answer_callback_query(call.id, text="Cancelled!")
+
+@bot.message_handler(func=lambda m: m.from_user.id in paydue_states and not (m.text or '').startswith('/'))
+def handle_paydue_amount(message):
+    uid = message.from_user.id
+    state = paydue_states.get(uid)
+    amount = parse_amount(message.text)
+    if amount is None:
+        bot.reply_to(message, "⚠️ Please send a valid amount (numbers only). Example: 500")
+        return
+
+    amt = fmt_amt(amount)
+    full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip() or "Unknown"
+
+    admin_text = (
+        "💸 <b>PAY DUE REQUEST</b>\n\n"
+        f"👤 Name: {html.escape(full_name)}\n"
+        f"🆔 User ID: <code>{uid}</code>\n"
+        f"💵 Amount: <code>{amt} TK</code>"
+    )
+    admin_markup = types.InlineKeyboardMarkup()
+    admin_markup.add(types.InlineKeyboardButton("🚫 Cancel", callback_data=f"pdc_{uid}_{amt}"))
+
+    try:
+        bot.send_message(ADMIN_ID, admin_text, parse_mode='HTML', reply_markup=admin_markup)
+    except Exception as e:
+        print(f"Pay due admin notify error: {e}")
+        bot.reply_to(message, "⚠️ Could not send your request to the admin. Please try again later.")
+        return
+
+    paydue_states.pop(uid, None)
+    if state:
+        try:
+            bot.edit_message_reply_markup(state['chat_id'], state['msg_id'], reply_markup=None)
+        except Exception:
+            pass
+    bot.reply_to(message, f"✅ Your payment of {amt} TK has been sent to the admin.", reply_markup=profile_back_markup())
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pdc_'))
+def handle_paydue_admin_cancel(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    try:
+        _, uid, amt = call.data.split('_', 2)
+    except Exception:
+        bot.answer_callback_query(call.id)
+        return
+
+    base_text = call.message.html_text or ""
+    try:
+        bot.edit_message_text(base_text + "\n\n🚫 <b>Cancelled</b>", chat_id=call.message.chat.id,
+                              message_id=call.message.message_id, parse_mode='HTML')
+    except Exception:
+        pass
+    try:
+        bot.send_message(int(uid), f"❌ Your due payment request of {amt} TK was cancelled by admin.")
+    except Exception as e:
+        print(f"Pay due cancel notify error: {e}")
+    bot.answer_callback_query(call.id, text="Cancelled 🚫")
+
+# ---------- 2) Add Bank ----------
+def get_bank(uid):
+    """None = database error, {} = কিছু নেই, dict = সেভ করা তথ্য"""
+    rows = db_run(
+        "SELECT bank_name, account_name, account_number, division, branch, bkash_number FROM bank WHERE telegram_id = ?",
+        [str(uid)]
+    )
+    if rows is None:
+        return None
+    if not rows:
+        return {}
+    return {key: (rows[0][i] or '') for i, (key, _) in enumerate(BANK_FIELDS)}
+
+def bank_complete(b):
+    return bool(b) and all(b.get(key) for key, _ in BANK_FIELDS)
+
+def save_bank(uid, data):
+    res = db_run(
+        "INSERT OR REPLACE INTO bank (telegram_id, bank_name, account_name, account_number, division, branch, bkash_number) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [str(uid)] + [str(data.get(key, '')) for key, _ in BANK_FIELDS]
+    )
+    return res is not None
+
+def format_bank_details(b, title="YOUR BANK DETAILS"):
+    lines = "\n".join(f"{label + ':':<16}{html.escape(b.get(key, ''))}" for key, label in BANK_FIELDS)
+    return f"🏦 <b>{title}</b>\n\n<pre>{lines}</pre>"
+
+def bank_view_markup():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✏️ Edit", callback_data="bank_edit"),
+        types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile")
+    )
+    return markup
+
+def bank_prompt_text(step):
+    return f"✏️ <b>EDIT BANK DETAILS</b>\n\nEnter your {BANK_FIELDS[step][1]}:"
+
+def bank_prompt_markup():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="bank_back"))
+    return markup
+
+def start_bank_edit(call):
+    show_page(call, bank_prompt_text(0), bank_prompt_markup())
+    bank_states[call.from_user.id] = {
+        'step': 0, 'data': {},
+        'chat_id': call.message.chat.id, 'msg_id': call.message.message_id
+    }
+
+@bot.callback_query_handler(func=lambda call: call.data == 'prof_bank')
+def handle_bank_menu(call):
+    b = get_bank(call.from_user.id)
+    if b is None:
+        bot.answer_callback_query(call.id, text="⚠️ Something went wrong. Try again.", show_alert=True)
+        return
+    if bank_complete(b):
+        show_page(call, format_bank_details(b), bank_view_markup())
+    else:
+        start_bank_edit(call)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'bank_edit')
+def handle_bank_edit(call):
+    start_bank_edit(call)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'bank_back')
+def handle_bank_back(call):
+    uid = call.from_user.id
+    st = bank_states.get(uid)
+    if st and st['step'] > 0:
+        st['step'] -= 1
+        st['msg_id'] = call.message.message_id
+        show_page(call, bank_prompt_text(st['step']), bank_prompt_markup())
+    else:
+        bank_states.pop(uid, None)
+        b = get_bank(uid)
+        if bank_complete(b):
+            show_page(call, format_bank_details(b), bank_view_markup())
+        else:
+            text, markup = build_profile_menu()
+            show_page(call, text, markup)
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda m: m.from_user.id in bank_states and not (m.text or '').startswith('/'))
+def handle_bank_input(message):
+    uid = message.from_user.id
+    st = bank_states.get(uid)
+    if not st:
+        return
+
+    value = (message.text or '').strip()
+    if not value or len(value) > 100:
+        bot.reply_to(message, "⚠️ Please enter a valid value (max 100 characters).")
+        return
+
+    st['data'][BANK_FIELDS[st['step']][0]] = value
+
+    # আগের প্রম্পটের Back বাটন সরিয়ে দিই
+    try:
+        bot.edit_message_reply_markup(st['chat_id'], st['msg_id'], reply_markup=None)
+    except Exception:
+        pass
+
+    st['step'] += 1
+    if st['step'] < len(BANK_FIELDS):
+        sent = bot.send_message(message.chat.id, bank_prompt_text(st['step']), parse_mode='HTML',
+                                reply_markup=bank_prompt_markup())
+        st['chat_id'] = message.chat.id
+        st['msg_id'] = sent.message_id
+        return
+
+    # সব তথ্য দেওয়া হয়ে গেছে -> সেভ
+    if save_bank(uid, st['data']):
+        data = st['data']
+        bank_states.pop(uid, None)
+        bot.send_message(message.chat.id, format_bank_details(data), parse_mode='HTML', reply_markup=bank_view_markup())
+    else:
+        st['step'] = len(BANK_FIELDS) - 1
+        sent = bot.send_message(
+            message.chat.id,
+            "⚠️ Could not save right now. Please send your " + BANK_FIELDS[-1][1] + " again.",
+            reply_markup=bank_prompt_markup()
+        )
+        st['chat_id'] = message.chat.id
+        st['msg_id'] = sent.message_id
+
+@bot.message_handler(commands=['bank', 'Bank'])
+def handle_admin_bank_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        bot.reply_to(message, "⚠️ Usage: `/bank <user_id>`\nExample: `/bank 5763930051`", parse_mode='Markdown')
+        return
+
+    target = args[1]
+    b = get_bank(target)
+    if b is None:
+        bot.reply_to(message, "⚠️ Database error. Please try again.")
+        return
+    if not b:
+        bot.reply_to(message, f"ℹ️ User `{target}` has not added bank details yet.", parse_mode='Markdown')
+        return
+
+    name = html.escape(get_user_name(target))
+    text = format_bank_details(b, title=f"BANK DETAILS - {name}") + f"\n🆔 User ID: <code>{target}</code>"
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
+
+# ---------- 3) Broadcasts (ইউজারের পাওয়া সব ব্রডকাস্ট) ----------
+BC_LABELS = {
+    'photo': '📷 Photo', 'video': '🎬 Video', 'document': '📎 File',
+    'audio': '🎵 Audio', 'voice': '🎤 Voice', 'animation': '🎞 GIF'
+}
+
+def save_broadcast(uid, msg):
+    body = msg.text if msg.content_type == 'text' else (getattr(msg, 'caption', None) or '')
+    db_run(
+        "INSERT INTO broadcasts (telegram_id, ts, content_type, body) VALUES (?, ?, ?, ?)",
+        [str(uid), int(time.time()), msg.content_type, body or '']
+    )
+
+def fit_text(body, limit=1200, max_escaped=3000):
+    body = body or ''
+    cut = len(body) > limit
+    body = body[:limit]
+    esc = html.escape(body, quote=False)
+    while len(esc) > max_escaped:
+        body = body[:int(len(body) * 0.8)]
+        esc = html.escape(body, quote=False)
+        cut = True
+    return esc + ('…' if cut else '')
+
+def build_user_broadcasts_page(uid, page):
+    rows = db_run(
+        "SELECT ts, content_type, body FROM broadcasts WHERE telegram_id = ? ORDER BY ts DESC, id DESC LIMIT 100",
+        [str(uid)]
+    )
+    markup = types.InlineKeyboardMarkup()
+
+    if rows is None:
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+        return "📢 <b>BROADCASTS</b>\n\n⚠️ Something went wrong. Please try again.", markup
+    if not rows:
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+        return "📢 <b>BROADCASTS</b>\n\n❌ No broadcasts yet.", markup
+
+    entries = []
+    for ts, ctype, body in rows:
+        head = f"🕒 {fmt_bd_time(ts)}"
+        label = BC_LABELS.get(ctype)
+        if label:
+            head += f"\n[{label}]"
+        text_part = fit_text(body)
+        entries.append(head + ("\n" + text_part if text_part else ""))
+
+    # প্রতি পেজে সর্বোচ্চ ৫টা, আর Telegram এর লেখার সীমা পার না করে
+    pages = []
+    cur = []
+    cur_len = 0
+    for e in entries:
+        if cur and (len(cur) >= 5 or cur_len + len(e) > 3400):
+            pages.append(cur)
+            cur, cur_len = [], 0
+        cur.append(e)
+        cur_len += len(e)
+    if cur:
+        pages.append(cur)
+
+    total = len(pages)
+    page = max(1, min(page, total))
+    text = f"📢 <b>BROADCASTS</b> (Page {page}/{total})\n\n" + "\n──────────────────\n".join(pages[page - 1])
+
+    nav = []
+    if page > 1:
+        nav.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"userbc_{page - 1}"))
+    if page < total:
+        nav.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"userbc_{page + 1}"))
+    if nav:
+        markup.row(*nav)
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
+    return text, markup
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('userbc_'))
+def handle_user_broadcasts(call):
+    try:
+        page = int(call.data.split('_')[1])
+    except Exception:
+        page = 1
+    text, markup = build_user_broadcasts_page(call.from_user.id, page)
+    show_page(call, text, markup)
+    bot.answer_callback_query(call.id)
+# ==================== END PROFILE MENU ====================
 
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
