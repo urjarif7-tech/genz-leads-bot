@@ -426,10 +426,10 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     today_date_str_alt = bd_now.strftime("%d/%m/%Y")
     
     today_spend = 0.0
-    for entry in u_data.get('purchases', []):
+    for entry in u_data.get('due_logs', []):
         entry_date = entry.get('date', '')
         if entry_date == today_date_str or entry_date == today_date_str_alt:
-            today_spend += float(entry.get('cost', 0.0))
+            today_spend += float(entry.get('price', 0.0))
 
     balance = float(u_data.get('balance', 0.0))
 
@@ -1095,11 +1095,11 @@ def generate_due_query_text(telegram_id):
     text += "MONTHLY SPENDING\n"
 
     monthly_spend = defaultdict(float)
-    for entry in u_data.get('purchases', []):
+    for entry in logs:
         try:
             e_date = datetime.strptime(entry.get('date', ''), "%Y-%m-%d")
             m_key = e_date.strftime("%Y-%m")
-            monthly_spend[m_key] += float(entry.get('cost', 0.0))
+            monthly_spend[m_key] += float(entry.get('price', 0.0))
         except Exception:
             pass
 
@@ -1575,7 +1575,8 @@ def handle_admin_dashboard(message):
         "`/userid` - All users list with last active time\n"
         "`/kick <user_id>` - Remove user (must request /start again)\n"
         "`/broadcast <user_id|all>` - Send a message to one user or everyone\n"
-        "`/bank <user_id>` - View user bank details"
+        "`/bank <user_id>` - View user bank details\n"
+        "`/removedue <user_id> <YYYY-MM-DD> <amount>` - Remove one wrong due entry"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -1813,6 +1814,49 @@ def handle_add_due(message):
             return
 
     bot.reply_to(message, f"🔴 Successfully added Due amount `{amount} TK` for User ID `{target_user}`!", parse_mode='Markdown')
+
+@bot.message_handler(commands=['removedue'])
+def handle_remove_due(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        args = message.text.split()
+        target_user = args[1]
+        target_date = args[2]
+        amount = float(args[3])
+    except Exception:
+        bot.reply_to(message, "⚠️ Usage: `/removedue <user_id> <YYYY-MM-DD> <amount>`\nExample: `/removedue 5763930051 2026-11-04 5`", parse_mode='Markdown')
+        return
+
+    with user_lock(target_user):
+        u_data = get_user_db_strict(target_user)
+        if u_data is None:
+            bot.reply_to(message, "⚠️ Database error. Nothing was changed. Please try again.")
+            return
+
+        logs = u_data['due_logs']
+        idx = -1
+        for i, entry in enumerate(logs):
+            if entry.get('date') == target_date and abs(float(entry.get('price', 0.0)) - amount) < 1e-9:
+                idx = i
+                break
+        if idx == -1:
+            bot.reply_to(message, f"❌ No due entry found for `{target_date}` with `{amount}` TK.", parse_mode='Markdown')
+            return
+
+        removed = logs.pop(idx)
+        if not save_user_db(target_user, u_data):
+            bot.reply_to(message, "⚠️ Database error. Nothing was saved. Please try again.")
+            return
+
+    paid_note = ""
+    if float(removed.get('paid', 0.0)) > 0:
+        paid_note = f"\n(That entry had `{removed.get('paid')} TK` marked as paid.)"
+    bot.reply_to(
+        message,
+        f"🗑 Removed due entry `{amount} TK` ({target_date}) for User ID `{target_user}`.{paid_note}",
+        parse_mode='Markdown'
+    )
 
 # --- REQUEST BALANCE ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
