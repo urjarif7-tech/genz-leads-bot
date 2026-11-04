@@ -1349,7 +1349,8 @@ def handle_admin_dashboard(message):
         "`/history <user_id>` - View user purchase history\n"
         "`/adddue <user_id> <amount>` - Directly add due\n"
         "`/userid` - All users list with last active time\n"
-        "`/kick <user_id>` - Remove user (must request /start again)"
+        "`/kick <user_id>` - Remove user (must request /start again)\n"
+        "`/broadcast <user_id|all>` - Send a message to one user or everyone"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -1819,6 +1820,144 @@ def handle_kick_cmd(message):
 
     bot.reply_to(message, f"✅ User `{target}` has been kicked. They must send /start and get approved again.", parse_mode='Markdown')
 # ==================== END /userid ====================
+
+# ==================== ADMIN: /broadcast <user_id | all> ====================
+BROADCAST_STATE_TIMEOUT = 10 * 60   # ১০ মিনিটের মধ্যে মেসেজ না লিখলে বাতিল
+BROADCAST_CONTENT_TYPES = ['text', 'photo', 'video', 'document', 'audio', 'voice', 'animation']
+broadcast_states = {}               # ADMIN_ID -> {'target': 'all' | user_id, 'prompt_id': message_id, 'ts': time}
+
+def is_broadcast_waiting():
+    st = broadcast_states.get(ADMIN_ID)
+    if not st:
+        return False
+    if time.time() - st['ts'] > BROADCAST_STATE_TIMEOUT:
+        broadcast_states.pop(ADMIN_ID, None)
+        return False
+    return True
+
+def send_broadcast_to(uid, from_chat_id, msg):
+    """একজনকে মেসেজ পাঠায়। সফল হলে True, না হলে False (যেমন ইউজার বট ব্লক করলে)।"""
+    for attempt in range(2):
+        try:
+            if hasattr(bot, 'copy_message'):
+                bot.copy_message(int(uid), from_chat_id, msg.message_id)
+            elif msg.content_type == 'text':
+                bot.send_message(int(uid), msg.text)
+            else:
+                return False
+            return True
+        except Exception as e:
+            if '429' in str(e) and attempt == 0:
+                wait = 5
+                try:
+                    wait = int(e.result_json['parameters']['retry_after']) + 1
+                except Exception:
+                    pass
+                time.sleep(wait)
+                continue
+            print(f"Broadcast send error to {uid}: {e}")
+            return False
+    return False
+
+def run_broadcast_all(recipients, admin_chat_id, msg):
+    sent = 0
+    failed = 0
+    for uid in recipients:
+        if send_broadcast_to(uid, admin_chat_id, msg):
+            sent += 1
+        else:
+            failed += 1
+        time.sleep(0.05)   # Telegram limit (প্রায় ৩০ মেসেজ/সেকেন্ড) এর নিচে থাকার জন্য
+    try:
+        bot.send_message(
+            admin_chat_id,
+            f"📢 Broadcast finished.\n\n✅ Sent: {sent}\n❌ Failed: {failed}"
+        )
+    except Exception:
+        pass
+
+@bot.message_handler(commands=['broadcast'])
+def handle_broadcast_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not (args[1].lower() == 'all' or args[1].isdigit()):
+        bot.reply_to(
+            message,
+            "⚠️ Usage:\n`/broadcast <user_id>` - একজনকে পাঠাতে\n`/broadcast all` - সবাইকে পাঠাতে",
+            parse_mode='Markdown'
+        )
+        return
+
+    target = 'all' if args[1].lower() == 'all' else args[1]
+
+    # আগের কোনো প্রম্পট থাকলে তার Cancel বাটন সরিয়ে দিই
+    old = broadcast_states.get(ADMIN_ID)
+    if old:
+        try:
+            bot.edit_message_reply_markup(message.chat.id, old['prompt_id'], reply_markup=None)
+        except Exception:
+            pass
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="bc_cancel"))
+    prompt = bot.send_message(message.chat.id, "What would you like to share?", reply_markup=markup)
+
+    broadcast_states[ADMIN_ID] = {'target': target, 'prompt_id': prompt.message_id, 'ts': time.time()}
+
+@bot.callback_query_handler(func=lambda call: call.data == 'bc_cancel')
+def handle_broadcast_cancel(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    broadcast_states.pop(ADMIN_ID, None)
+    try:
+        bot.edit_message_text("❌ Broadcast cancelled.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        bot.answer_callback_query(call.id, text="Cancelled!")
+    except Exception:
+        bot.answer_callback_query(call.id)
+
+@bot.message_handler(
+    func=lambda m: m.from_user.id == ADMIN_ID and is_broadcast_waiting() and not (m.text or '').startswith('/'),
+    content_types=BROADCAST_CONTENT_TYPES
+)
+def handle_broadcast_content(message):
+    state = broadcast_states.pop(ADMIN_ID, None)
+    if not state:
+        return
+
+    # প্রম্পটের Cancel বাটন সরিয়ে দিই
+    try:
+        bot.edit_message_reply_markup(message.chat.id, state['prompt_id'], reply_markup=None)
+    except Exception:
+        pass
+
+    target = state['target']
+
+    if target == 'all':
+        recipients = [uid for uid, _, _ in get_all_users_sorted() if int(uid) != ADMIN_ID]
+        if not recipients:
+            bot.reply_to(message, "❌ No users to send to.")
+            return
+        bot.reply_to(message, f"📤 Sending to {len(recipients)} users...")
+        threading.Thread(
+            target=run_broadcast_all,
+            args=(recipients, message.chat.id, message),
+            daemon=True
+        ).start()
+    else:
+        if send_broadcast_to(target, message.chat.id, message):
+            bot.reply_to(message, f"✅ Message sent to `{target}`.", parse_mode='Markdown')
+        else:
+            bot.reply_to(
+                message,
+                f"❌ Could not send to `{target}`.\nUser may have blocked the bot or never started it.",
+                parse_mode='Markdown'
+            )
+# ==================== END /broadcast ====================
+
 
 @bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
 def handle_back_to_welcome(call):
