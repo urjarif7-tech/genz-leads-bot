@@ -345,7 +345,7 @@ def release_hold(uid, amount):
         held_amounts[key] = max(0.0, held_amounts[key] - amount)
 
 def charge_user(uid, cost, item_label, quantity=1, force=False):
-    """ব্যালেন্স কেটে purchase আর due লগ লেখে (atomic)।
+    """ব্যালেন্স কেটে purchase লগ লেখে (atomic)। কেনাকাটা due এ যোগ হয় না।
     সফল হলে নতুন ব্যালেন্স, ব্যালেন্স কম হলে False, ডাটাবেস error হলে None।"""
     key = str(uid).strip()
     with user_lock(key):
@@ -357,7 +357,6 @@ def charge_user(uid, cost, item_label, quantity=1, force=False):
 
         u['balance'] -= cost
         u['spend'] += cost
-        u['due'] += cost
 
         bd_time = datetime.utcnow() + timedelta(hours=6)
         bd_date_str = bd_time.strftime("%Y-%m-%d")
@@ -368,7 +367,6 @@ def charge_user(uid, cost, item_label, quantity=1, force=False):
             'quantity': quantity,
             'cost': cost
         })
-        u['due_logs'].append({'date': bd_date_str, 'price': cost, 'paid': 0.0})
 
         if not save_user_db(key, u):
             return None
@@ -428,10 +426,10 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     today_date_str_alt = bd_now.strftime("%d/%m/%Y")
     
     today_spend = 0.0
-    for entry in u_data.get('due_logs', []):
+    for entry in u_data.get('purchases', []):
         entry_date = entry.get('date', '')
         if entry_date == today_date_str or entry_date == today_date_str_alt:
-            today_spend += float(entry.get('price', 0.0))
+            today_spend += float(entry.get('cost', 0.0))
 
     balance = float(u_data.get('balance', 0.0))
 
@@ -1097,11 +1095,11 @@ def generate_due_query_text(telegram_id):
     text += "MONTHLY SPENDING\n"
 
     monthly_spend = defaultdict(float)
-    for entry in logs:
+    for entry in u_data.get('purchases', []):
         try:
             e_date = datetime.strptime(entry.get('date', ''), "%Y-%m-%d")
             m_key = e_date.strftime("%Y-%m")
-            monthly_spend[m_key] += float(entry.get('price', 0.0))
+            monthly_spend[m_key] += float(entry.get('cost', 0.0))
         except Exception:
             pass
 
