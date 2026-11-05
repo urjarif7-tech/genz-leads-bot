@@ -212,8 +212,44 @@ def init_db():
 
 init_db()
 
+# ---------- মাস/তারিখ হেল্পার (সব বাংলাদেশ সময়, UTC+6) ----------
+def bd_now():
+    return datetime.utcnow() + timedelta(hours=6)
+
+def current_month_key():
+    return bd_now().strftime("%Y-%m")
+
+def month_key_back(n):
+    d = bd_now()
+    y, m = d.year, d.month - n
+    while m <= 0:
+        m += 12
+        y -= 1
+    return f"{y:04d}-{m:02d}"
+
+def entry_month(date_str):
+    s = str(date_str or '').strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m")
+        except ValueError:
+            continue
+    return None
+
+PURCHASE_HISTORY_LIMIT = 25   # ৫ পেজ x ৫টা; এর আগের purchase ডাটাবেসে রাখা হয় না
+
+def _f(v):
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
 def _default_user():
-    return {'balance': 0.0, 'spend': 0.0, 'due': 0.0, 'paid': 0.0, 'purchases': [], 'due_logs': []}
+    return {
+        'balance': 0.0, 'spend': 0.0, 'due': 0.0, 'paid': 0.0,
+        'purchases': [], 'due_logs': [],
+        'meta': {'month': current_month_key(), 'monthly_added': {}}
+    }
 
 def _json_list(raw):
     try:
@@ -222,10 +258,66 @@ def _json_list(raw):
     except Exception:
         return []
 
+def _json_dict(raw):
+    try:
+        v = json.loads(raw) if raw else {}
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+def _normalize_user(u):
+    """মাস বদলালে (প্রতি মাসের ১ তারিখ রাত ১২টার পর প্রথম ব্যবহারে) নিজে নিজে:
+    - পুরনো মাসের paid এন্ট্রি মুছে শুধু Due রাখে, Total Paid ০.০ করে
+    - Total Spend (এই মাসের কেনাকাটা) নতুন করে শুরু করে
+    - মাসের admin-added মোট হিসাব সংরক্ষণ করে (Monthly Spending এর জন্য)"""
+    cur = current_month_key()
+    meta = u.get('meta')
+    if not isinstance(meta, dict):
+        meta = {}
+    monthly = meta.get('monthly_added')
+    if not isinstance(monthly, dict):
+        monthly = {}
+
+    if meta.get('month') == cur:
+        u['meta'] = {'month': cur, 'monthly_added': monthly}
+        return u
+
+    logs = u.get('due_logs') or []
+
+    # ১) শেষ হয়ে যাওয়া মাসগুলোর admin-added মোট (যেগুলো আগে সেভ হয়নি) সংরক্ষণ
+    sums = defaultdict(float)
+    for e in logs:
+        m = entry_month(e.get('date'))
+        if m and m < cur and m not in monthly:
+            sums[m] += _f(e.get('price'))
+    for m, v in sums.items():
+        monthly[m] = round(v, 2)
+    for old_key in sorted(monthly.keys(), reverse=True)[12:]:
+        monthly.pop(old_key, None)
+
+    # ২) পুরনো মাসের paid এন্ট্রি মুছে ফেলা, আংশিক paid হলে শুধু বাকি অংশ Due হিসেবে থাকে
+    new_logs = []
+    for e in logs:
+        m = entry_month(e.get('date'))
+        if m is None or m < cur:
+            rem = max(0.0, _f(e.get('price')) - _f(e.get('paid')))
+            if rem > 1e-9:
+                new_logs.append({'date': e.get('date'), 'price': rem, 'paid': 0.0})
+        else:
+            new_logs.append(e)
+    u['due_logs'] = new_logs
+    u['paid'] = 0.0
+
+    # ৩) Total Spend = শুধু এই মাসের কেনাকাটা
+    u['spend'] = sum(_f(p.get('cost')) for p in (u.get('purchases') or []) if entry_month(p.get('date')) == cur)
+
+    u['meta'] = {'month': cur, 'monthly_added': monthly}
+    return u
+
 def _load_user(t_id):
     """ইউজারের ডাটা (নতুন ইউজার হলে শূন্য ডাটা)। ডাটাবেস error হলে None।"""
+    stmt = "SELECT balance, spend, due, paid, purchases, due_logs, meta FROM users WHERE telegram_id = ?"
     if TURSO_URL and TURSO_TOKEN:
-        stmt = "SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?"
         result = execute_turso_query(stmt, [t_id])
         if result is None:
             return None
@@ -238,20 +330,22 @@ def _load_user(t_id):
             v = cell.get("value")
             return float(v) if v is not None else 0.0
 
-        return {
+        u = {
             'balance': num(row[0]),
             'spend': num(row[1]),
             'due': num(row[2]),
             'paid': num(row[3]),
             'purchases': _json_list(row[4].get("value")),
-            'due_logs': _json_list(row[5].get("value"))
+            'due_logs': _json_list(row[5].get("value")),
+            'meta': _json_dict(row[6].get("value"))
         }
+        return _normalize_user(u)
 
     try:
         conn = sqlite3.connect(DB_FILE)
         try:
             cursor = conn.cursor()
-            cursor.execute('SELECT balance, spend, due, paid, purchases, due_logs FROM users WHERE telegram_id = ?', (t_id,))
+            cursor.execute(stmt, (t_id,))
             row = cursor.fetchone()
         finally:
             conn.close()
@@ -261,14 +355,16 @@ def _load_user(t_id):
 
     if not row:
         return _default_user()
-    return {
+    u = {
         'balance': float(row[0] or 0.0),
         'spend': float(row[1] or 0.0),
         'due': float(row[2] or 0.0),
         'paid': float(row[3] or 0.0),
         'purchases': _json_list(row[4]),
-        'due_logs': _json_list(row[5])
+        'due_logs': _json_list(row[5]),
+        'meta': _json_dict(row[6])
     }
+    return _normalize_user(u)
 
 def get_user_db(telegram_id):
     """শুধু দেখার জন্য। ডাটাবেস error হলে শূন্য ডাটা দেয় (এটা দিয়ে কখনো সেভ করবেন না)।"""
@@ -282,6 +378,9 @@ def get_user_db_strict(telegram_id):
 def save_user_db(telegram_id, data):
     """সফল হলে True, না হলে False।"""
     t_id = str(telegram_id).strip()
+    meta = data.get('meta')
+    if not isinstance(meta, dict) or not meta:
+        meta = {'month': current_month_key(), 'monthly_added': {}}
     args = [
         t_id,
         float(data.get('balance', 0.0)),
@@ -289,11 +388,12 @@ def save_user_db(telegram_id, data):
         float(data.get('due', 0.0)),
         float(data.get('paid', 0.0)),
         json.dumps(data.get('purchases', [])),
-        json.dumps(data.get('due_logs', []))
+        json.dumps(data.get('due_logs', [])),
+        json.dumps(meta)
     ]
     stmt = '''
-        INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO users (telegram_id, balance, spend, due, paid, purchases, due_logs, meta)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     '''
     if TURSO_URL and TURSO_TOKEN:
         return execute_turso_query(stmt, args) is not None
@@ -310,6 +410,35 @@ def save_user_db(telegram_id, data):
     except Exception as e:
         print(f"SQLite write error: {e}")
         return False
+
+def ensure_meta_column():
+    """পুরনো ডাটাবেসে নতুন 'meta' কলাম যোগ করে (একবারই লাগে, আবার চালালে ক্ষতি নেই)।"""
+    for _ in range(3):
+        if TURSO_URL and TURSO_TOKEN:
+            if execute_turso_query("SELECT meta FROM users LIMIT 1") is not None:
+                return
+            execute_turso_query("ALTER TABLE users ADD COLUMN meta TEXT DEFAULT '{}'")
+            if execute_turso_query("SELECT meta FROM users LIMIT 1") is not None:
+                return
+        else:
+            try:
+                conn = sqlite3.connect(DB_FILE)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("PRAGMA table_info(users)")
+                    cols = [r[1] for r in cur.fetchall()]
+                    if 'meta' not in cols:
+                        cur.execute("ALTER TABLE users ADD COLUMN meta TEXT DEFAULT '{}'")
+                        conn.commit()
+                finally:
+                    conn.close()
+                return
+            except Exception as e:
+                print(f"ensure_meta_column error: {e}")
+        time.sleep(1)
+    print("⚠️ Could not verify the 'meta' column in the users table.")
+
+ensure_meta_column()
 
 # ---------- ইউজার-ভিত্তিক lock, hold আর atomic charge ----------
 _user_locks = {}
@@ -358,7 +487,7 @@ def charge_user(uid, cost, item_label, quantity=1, force=False):
         u['balance'] -= cost
         u['spend'] += cost
 
-        bd_time = datetime.utcnow() + timedelta(hours=6)
+        bd_time = bd_now()
         bd_date_str = bd_time.strftime("%Y-%m-%d")
         u['purchases'].insert(0, {
             'date': bd_date_str,
@@ -367,6 +496,7 @@ def charge_user(uid, cost, item_label, quantity=1, force=False):
             'quantity': quantity,
             'cost': cost
         })
+        u['purchases'] = u['purchases'][:PURCHASE_HISTORY_LIMIT]
 
         if not save_user_db(key, u):
             return None
@@ -421,15 +551,15 @@ def build_welcome_dashboard(user_first_name, telegram_id):
     uid = str(telegram_id)
     u_data = get_user_db(uid)
     
-    bd_now = datetime.utcnow() + timedelta(hours=6)
-    today_date_str = bd_now.strftime("%Y-%m-%d")
-    today_date_str_alt = bd_now.strftime("%d/%m/%Y")
+    _now = bd_now()
+    today_date_str = _now.strftime("%Y-%m-%d")
+    today_date_str_alt = _now.strftime("%d/%m/%Y")
     
     today_spend = 0.0
-    for entry in u_data.get('due_logs', []):
+    for entry in u_data.get('purchases', []):
         entry_date = entry.get('date', '')
         if entry_date == today_date_str or entry_date == today_date_str_alt:
-            today_spend += float(entry.get('price', 0.0))
+            today_spend += float(entry.get('cost', 0.0))
 
     balance = float(u_data.get('balance', 0.0))
 
@@ -1053,32 +1183,51 @@ def handle_manual_number_block(call):
     except Exception:
         bot.answer_callback_query(call.id)
 
-def generate_due_query_text(telegram_id):
+DUE_ENTRIES_PER_PAGE = 8
+
+def generate_due_query_text(telegram_id, page=1, admin=False):
     uid = str(telegram_id)
-    u_data = get_user_db(uid)
+    u_data = get_user_db_strict(uid)
+
+    def cb(n):
+        return f"admdue_{uid}_{n}" if admin else f"duepage_{n}"
+
+    if u_data is None:
+        markup = types.InlineKeyboardMarkup()
+        markup.row(types.InlineKeyboardButton("🔄 Refresh", callback_data=cb(page)))
+        if not admin:
+            markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        return "⚠️ Something went wrong. Please try again.", markup
+
     logs = u_data['due_logs']
 
-    text = "📋 **YOUR DUE SUMMARY**\n-------------------------\n"
-
     if not logs:
-        text += "❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
+        text = "📋 **YOUR DUE SUMMARY**\n-------------------------\n❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        if not admin:
+            markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
         return text, markup
 
     tot_due = 0.0
     tot_paid = 0.0
-
+    due_entries = []
+    paid_entries = []
     for entry in logs:
-        p = float(entry.get('price', 0.0))
-        pd = float(entry.get('paid', 0.0))
+        p = _f(entry.get('price'))
+        pd = _f(entry.get('paid'))
         rem = max(0.0, p - pd)
-        
         tot_due += rem
         tot_paid += pd
+        (due_entries if rem > 1e-9 else paid_entries).append((entry, p, pd, rem))
 
-        status_tag = "✅ Paid" if rem == 0 else "🔴 Due"
-        
+    ordered = due_entries + paid_entries   # আগে Due, তারপর Paid
+    total_pages = max(1, (len(ordered) + DUE_ENTRIES_PER_PAGE - 1) // DUE_ENTRIES_PER_PAGE)
+    page = max(1, min(int(page), total_pages))
+    chunk = ordered[(page - 1) * DUE_ENTRIES_PER_PAGE: page * DUE_ENTRIES_PER_PAGE]
+
+    text = f"📋 **YOUR DUE SUMMARY** (Page {page}/{total_pages})\n-------------------------\n"
+    for entry, p, pd, rem in chunk:
+        status_tag = "✅ Paid" if rem <= 1e-9 else "🔴 Due"
         text += f"🛒 Balance {status_tag}\n"
         text += f"Date:        {entry.get('date', 'N/A')}\n"
         text += f"Price:       {p:,.1f} TK\n"
@@ -1086,37 +1235,31 @@ def generate_due_query_text(telegram_id):
         text += f"Remaining: {rem:,.1f} TK\n"
         text += "-------------------------\n"
 
-    curr_bal = get_effective_balance(uid)
-
     text += f"Total Due:   {tot_due:,.1f} TK\n"
     text += f"Total Paid:  {tot_paid:,.1f} TK\n"
-    text += f"Balance:     {curr_bal:,.1f} TK\n"
+    text += f"Balance:     {_f(u_data.get('balance')):,.1f} TK\n"
     text += "-------------------------\n"
     text += "MONTHLY SPENDING\n"
 
-    monthly_spend = defaultdict(float)
-    for entry in logs:
-        try:
-            e_date = datetime.strptime(entry.get('date', ''), "%Y-%m-%d")
-            m_key = e_date.strftime("%Y-%m")
-            monthly_spend[m_key] += float(entry.get('price', 0.0))
-        except Exception:
-            pass
-
-    bd_now = datetime.utcnow() + timedelta(hours=6)
-    month_keys = []
+    # চলতি মাস = এখনকার এন্ট্রি থেকে, আগের মাসগুলো = মাস শেষে সংরক্ষিত মোট
+    cur_key = current_month_key()
+    live = sum(_f(e.get('price')) for e in logs if entry_month(e.get('date')) == cur_key)
+    saved = (u_data.get('meta') or {}).get('monthly_added', {})
     for i in range(5):
-        m_date = bd_now - timedelta(days=30 * i)
-        month_keys.append(m_date.strftime("%Y-%m"))
+        k = month_key_back(i)
+        amt = live if i == 0 else _f(saved.get(k, 0.0))
+        text += f"{k}: {amt:,.1f} TK\n"
 
-    for m_k in month_keys:
-        amt = monthly_spend.get(m_k, 0.0)
-        text += f"{m_k}: {amt:,.1f} TK\n"
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_refresh = types.InlineKeyboardButton("🔄 Refresh", callback_data="due_query")
-    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
-    markup.add(btn_refresh, btn_back)
+    markup = types.InlineKeyboardMarkup()
+    nav = []
+    if page > 1:
+        nav.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=cb(page - 1)))
+    nav.append(types.InlineKeyboardButton("🔄 Refresh", callback_data=cb(page)))
+    if page < total_pages:
+        nav.append(types.InlineKeyboardButton("Next ➡️", callback_data=cb(page + 1)))
+    markup.row(*nav)
+    if not admin:
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
 
     return text, markup
 
@@ -1480,15 +1623,46 @@ def handle_711_quantity(call):
         bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == 'due_query')
+@bot.callback_query_handler(func=lambda call: call.data == 'due_query' or call.data.startswith('duepage_'))
 def handle_user_due_query(call):
-    text, markup = generate_due_query_text(call.from_user.id)
+    page = 1
+    if call.data.startswith('duepage_'):
+        try:
+            page = int(call.data.split('_')[1])
+        except Exception:
+            page = 1
+    text, markup = generate_due_query_text(call.from_user.id, page)
     try:
         bot.edit_message_text(
-            text, 
-            chat_id=call.message.chat.id, 
-            message_id=call.message.message_id, 
-            parse_mode='Markdown', 
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+        bot.answer_callback_query(call.id)
+    except Exception:
+        bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admdue_'))
+def handle_admin_due_pagination(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    try:
+        parts = call.data.split('_')
+        target_user = parts[1]
+        page = int(parts[2])
+    except Exception:
+        bot.answer_callback_query(call.id)
+        return
+    text, markup = generate_due_query_text(target_user, page, admin=True)
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode='Markdown',
             reply_markup=markup
         )
         bot.answer_callback_query(call.id)
@@ -1529,7 +1703,7 @@ def handle_user_history(call):
                 f"----------------------------------------\n"
             )
 
-        total_spend = sum(float(item.get('cost', 0.0)) for item in history_list)
+        total_spend = float(u_data.get('spend', 0.0))
         text += f"\nTotal Spend : {total_spend} TK"
 
         markup = types.InlineKeyboardMarkup()
@@ -1627,7 +1801,7 @@ def send_admin_history_page(chat_id, target_user, page, message_id=None):
             f"----------------------------------------\n"
         )
 
-    total_spend = sum(float(item.get('cost', 0.0)) for item in history_list)
+    total_spend = float(u_data.get('spend', 0.0))
     text += f"\nTotal Spend : {total_spend} TK"
 
     markup = types.InlineKeyboardMarkup()
@@ -1671,7 +1845,7 @@ def handle_admin_due_cmd(message):
     try:
         args = message.text.split()
         target_user = args[1]
-        text, markup = generate_due_query_text(target_user)
+        text, markup = generate_due_query_text(target_user, 1, True)
         bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
     except Exception:
         bot.reply_to(message, "⚠️ Usage: `/due <user_id>`\nExample: `/due 5763930051`", parse_mode='Markdown')
