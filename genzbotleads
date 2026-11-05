@@ -1762,7 +1762,8 @@ def handle_admin_dashboard(message):
         "`/kick <user_id>` - Remove user (must request /start again)\n"
         "`/broadcast <user_id|all>` - Send a message to one user or everyone\n"
         "`/bank <user_id>` - View user bank details\n"
-        "`/removedue <user_id> <YYYY-MM-DD> <amount>` - Remove one wrong due entry"
+        "`/removedue <user_id> <YYYY-MM-DD> <amount>` - Remove one wrong due entry\n"
+        "`/resetall <user_id>` - Delete ALL data of a user (balance, due, history, bank)"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -2043,6 +2044,121 @@ def handle_remove_due(message):
         f"🗑 Removed due entry `{amount} TK` ({target_date}) for User ID `{target_user}`.{paid_note}",
         parse_mode='Markdown'
     )
+
+# ==================== ADMIN: /resetall <user_id> ====================
+RESET_CONFIRM_SECONDS = 5 * 60
+reset_pending = {}   # target user id (str) -> কখন কনফার্মেশন চাওয়া হয়েছে
+
+def perform_user_reset(target):
+    """ইউজারের সব ডাটা (ব্যালেন্স, due/paid, purchase history, ব্যাংক তথ্য, সেভ করা ব্রডকাস্ট) মুছে দেয়।
+    বটে ঢোকার অনুমতি (approved status) থাকে। সফল হলে True।"""
+    key = str(target).strip()
+    cancel_ids = []
+    with user_lock(key):
+        # পুরনো ইউজার (access টেবিলে নেই) আগে approved হিসেবে সংরক্ষণ হয়, যাতে ডাটা মোছার পর লক না হয়ে যায়
+        acc = get_access(key)
+        if acc['status'] == 'error':
+            return False
+
+        # SMS এর অপেক্ষায় থাকা নম্বর আর আটকানো টাকা বাতিল
+        with orders_lock:
+            for oid in [o for o, v in active_orders.items() if str(v['uid']) == key]:
+                active_orders.pop(oid, None)
+                cancel_ids.append(oid)
+            for tok in [t for t, v in block_tokens.items() if str(v['uid']) == key]:
+                block_tokens.pop(tok, None)
+        held_amounts[key] = 0.0
+
+        results = [
+            db_run("DELETE FROM users WHERE telegram_id = ?", [key]),
+            db_run("DELETE FROM bank WHERE telegram_id = ?", [key]),
+            db_run("DELETE FROM broadcasts WHERE telegram_id = ?", [key]),
+        ]
+        if any(r is None for r in results):
+            return False
+
+    try:
+        clear_user_flows(int(key))
+    except Exception:
+        pass
+    for oid in cancel_ids:
+        cancel_durian_number_api(oid)
+    return True
+
+@bot.message_handler(commands=['resetall'])
+def handle_resetall_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        bot.reply_to(message, "⚠️ Usage: `/resetall <user_id>`\nExample: `/resetall 5763930051`", parse_mode='Markdown')
+        return
+
+    target = args[1]
+    u = get_user_db_strict(target)
+    if u is None:
+        bot.reply_to(message, "⚠️ Database error. Please try again.")
+        return
+
+    total_due = sum(max(0.0, _f(e.get('price')) - _f(e.get('paid'))) for e in u['due_logs'])
+    name = html.escape(get_user_name(target))
+    text = (
+        "⚠️ <b>RESET ALL DATA?</b>\n\n"
+        f"👤 {name}\n"
+        f"🆔 <code>{target}</code>\n\n"
+        f"💳 Balance: {_f(u.get('balance')):,.1f} TK\n"
+        f"🔴 Total Due: {total_due:,.1f} TK\n"
+        f"🛒 Purchases saved: {len(u['purchases'])}\n\n"
+        "This permanently deletes this user's balance, due, paid, purchase history, due records, "
+        "bank details and saved broadcasts. The user stays approved but becomes a brand-new user "
+        "with everything at 0.0.\n\n"
+        "<b>This cannot be undone.</b>"
+    )
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ Yes, reset", callback_data=f"rst_ok_{target}"),
+        types.InlineKeyboardButton("❌ Cancel", callback_data=f"rst_no_{target}")
+    )
+    reset_pending[target] = time.time()
+    bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('rst_'))
+def handle_resetall_decision(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    try:
+        _, action, target = call.data.split('_', 2)
+    except Exception:
+        bot.answer_callback_query(call.id)
+        return
+
+    def show(text):
+        try:
+            bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='HTML')
+        except Exception:
+            pass
+
+    ts = reset_pending.pop(target, None)
+
+    if action == 'no':
+        show("❌ Reset cancelled.")
+        bot.answer_callback_query(call.id, text="Cancelled")
+        return
+
+    if not ts or time.time() - ts > RESET_CONFIRM_SECONDS:
+        show("⌛ Confirmation expired. Send /resetall again.")
+        bot.answer_callback_query(call.id, text="Expired")
+        return
+
+    if perform_user_reset(target):
+        show(f"✅ All data for User ID <code>{target}</code> has been reset to 0.0.")
+        bot.answer_callback_query(call.id, text="Reset done ✅")
+    else:
+        show(f"⚠️ Reset failed for <code>{target}</code> (database error). Nothing may have been deleted fully, please check and try again.")
+        bot.answer_callback_query(call.id, text="Failed")
 
 # --- REQUEST BALANCE ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
