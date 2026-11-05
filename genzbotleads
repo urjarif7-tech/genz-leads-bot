@@ -726,12 +726,24 @@ def send_access_request(user):
     if user.username:
         text += f"\n🔗 Username: @{html.escape(user.username)}"
 
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("Accept✅", callback_data=f"acc_ok_{uid}"),
-        types.InlineKeyboardButton("Cancel🚫", callback_data=f"acc_no_{uid}")
-    )
-    bot.send_message(ADMIN_ID, text, parse_mode='HTML', reply_markup=markup)
+    def build_markup(with_profile):
+        mk = types.InlineKeyboardMarkup(row_width=2)
+        mk.add(
+            types.InlineKeyboardButton("Accept✅", callback_data=f"acc_ok_{uid}"),
+            types.InlineKeyboardButton("Cancel🚫", callback_data=f"acc_no_{uid}")
+        )
+        if with_profile:
+            # ইউজারনেম থাকলে t.me লিংক (সবসময় কাজ করে), না থাকলে tg://user?id= লিংক
+            profile_url = f"https://t.me/{user.username}" if user.username else f"tg://user?id={uid}"
+            mk.add(types.InlineKeyboardButton("👤 View Profile", url=profile_url))
+        return mk
+
+    try:
+        bot.send_message(ADMIN_ID, text, parse_mode='HTML', reply_markup=build_markup(True))
+    except Exception as e:
+        # ইউজারের প্রাইভেসি সেটিংসের কারণে প্রোফাইল বাটন Telegram নাও নিতে পারে -> বাটন ছাড়া পাঠাই
+        print(f"Profile button rejected, sending without it: {e}")
+        bot.send_message(ADMIN_ID, text, parse_mode='HTML', reply_markup=build_markup(False))
     bot.send_message(user.id, "⏳ Your request has been sent to the admin.")
 
 # --- Not approved ইউজারদের ব্লক (এগুলো সবার আগে থাকতে হবে) ---
