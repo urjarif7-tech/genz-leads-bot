@@ -524,15 +524,18 @@ def fetch_user_daily_earnings(telegram_id):
     if cached and time.time() - cached[1] < EARN_CACHE_SECONDS:
         return cached[0]
     try:
-        response = api_session.get(USER_API_URL, params={'telegram_id': key}, timeout=2)
+        response = api_session.get(USER_API_URL, params={'telegram_id': key}, timeout=4)
         if response.status_code == 200:
             data = response.json()
-            if isinstance(data, dict):
-                val = float(data.get('daily_earnings', 0.0))
+            if isinstance(data, dict) and 'daily_earnings' in data:
+                val = float(data.get('daily_earnings') or 0.0)
                 _earn_cache[key] = (val, time.time())
                 return val
-    except Exception:
-        pass
+            print(f"Earnings API unexpected body for {key}: {response.text[:200]}")
+        else:
+            print(f"Earnings API HTTP {response.status_code} for {key}: {response.text[:200]}")
+    except Exception as e:
+        print(f"Earnings API error for {key}: {e}")
     # API ধীর/বন্ধ থাকলে শেষবারের জানা মান দেখাই
     return cached[0] if cached else 0.0
 
@@ -540,7 +543,7 @@ def get_effective_balance(telegram_id):
     u_data = get_user_db(telegram_id)
     return float(u_data.get('balance', 0.0))
 
-def build_welcome_dashboard(user_first_name, telegram_id):
+def build_welcome_dashboard(user_first_name, telegram_id, admin_view=False):
     # earnings API আর ডাটাবেস একসাথে (parallel) চালাই, একটার জন্য আরেকটা অপেক্ষা করবে না
     earn_box = {}
     earn_thread = threading.Thread(
@@ -563,17 +566,31 @@ def build_welcome_dashboard(user_first_name, telegram_id):
 
     balance = float(u_data.get('balance', 0.0))
 
-    earn_thread.join(timeout=3)
+    earn_thread.join(timeout=5)
     api_daily_earnings = earn_box.get('v', _earn_cache.get(uid, (0.0, 0))[0])
 
+    id_line = f"🆔 `{uid}`\n" if admin_view else ""
     welcome_text = (
-        f"👋 **Welcome {user_first_name} To GenzBot!**\n\n"
+        f"👋 **Welcome {user_first_name} To GenzBot!**\n{id_line}\n"
         f"📥 `Daily Earnings: {api_daily_earnings} TK`\n"
         f"────────────────────────\n"
         f"📤 `Daily Spend: {today_spend} TK`\n"
         f"────────────────────────\n"
         f"💳 `Balance: {balance} TK`"
     )
+
+    if admin_view:
+        # অ্যাডমিন যখন /user <id> দিয়ে ইউজারের মেনু দেখে: শুধু Purchase History, Due Query, Bank
+        amk = types.InlineKeyboardMarkup(row_width=2)
+        amk.add(
+            types.InlineKeyboardButton("📜 Purchase History", callback_data=f"admhist_{uid}_1"),
+            types.InlineKeyboardButton("📋 Due Query", callback_data=f"admdue_{uid}_1")
+        )
+        amk.add(
+            types.InlineKeyboardButton("🏦 Bank", callback_data=f"admbank_{uid}"),
+            types.InlineKeyboardButton("🔄 Refresh", callback_data=f"admuser_{uid}")
+        )
+        return welcome_text, amk
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
@@ -1207,8 +1224,7 @@ def generate_due_query_text(telegram_id, page=1, admin=False):
     if u_data is None:
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🔄 Refresh", callback_data=cb(page)))
-        if not admin:
-            markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "go_welcome")))
         return "⚠️ Something went wrong. Please try again.", markup
 
     logs = u_data['due_logs']
@@ -1216,8 +1232,7 @@ def generate_due_query_text(telegram_id, page=1, admin=False):
     if not logs:
         text = "📋 **YOUR DUE SUMMARY**\n-------------------------\n❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
         markup = types.InlineKeyboardMarkup()
-        if not admin:
-            markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "go_welcome")))
         return text, markup
 
     tot_due = 0.0
@@ -1270,8 +1285,7 @@ def generate_due_query_text(telegram_id, page=1, admin=False):
     if page < total_pages:
         nav.append(types.InlineKeyboardButton("Next ➡️", callback_data=cb(page + 1)))
     markup.row(*nav)
-    if not admin:
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "go_welcome")))
 
     return text, markup
 
@@ -1753,46 +1767,35 @@ def handle_admin_dashboard(message):
     admin_summary = (
         "📊 **ADMIN DASHBOARD - COMMANDS**\n\n"
         "🛠 **Commands:**\n"
+        "`/user <user_id>` - Open a user's menu (stats, purchase history, due query, bank)\n"
         "`/addbalance <user_id> <amount>` - Balance add & due entry\n"
         "`/paid <user_id> <YYYY-MM-DD> <amount>` - Clear/Adjust payment\n"
-        "`/due <user_id>` - View user due query\n"
-        "`/history <user_id>` - View user purchase history\n"
         "`/adddue <user_id> <amount>` - Directly add due\n"
         "`/userid` - All users list with last active time\n"
         "`/kick <user_id>` - Remove user (must request /start again)\n"
         "`/broadcast <user_id|all>` - Send a message to one user or everyone\n"
-        "`/bank <user_id>` - View user bank details\n"
         "`/removedue <user_id> <YYYY-MM-DD> <amount>` - Remove one wrong due entry\n"
-        "`/resetall <user_id>` - Delete ALL data of a user (balance, due, history, bank)"
+        "`/resetall <user_id>` - Delete ALL data of a user (balance, due, history, bank)\n"
+        "`/earncheck <user_id>` - Test the Daily Earnings API for a user"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
 # --- ADMIN HISTORY COMMAND & PAGINATION ---
-@bot.message_handler(commands=['history'])
-def handle_admin_history_cmd(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "❌ You are not authorized.")
-        return
-    try:
-        args = message.text.split()
-        target_user = args[1]
-        send_admin_history_page(message.chat.id, target_user, page=1, message_id=None)
-    except Exception:
-        bot.reply_to(message, "⚠️ Usage: `/history <user_id>`\nExample: `/history 5763930051`", parse_mode='Markdown')
-
 def send_admin_history_page(chat_id, target_user, page, message_id=None):
     u_data = get_user_db(target_user)
     history_list = u_data['purchases']
     
     if not history_list:
         text = f"📜 **PURCHASE HISTORY FOR {target_user}**\n\n❌ এই ইউজারের কোনো purchase history নেই।"
+        empty_markup = types.InlineKeyboardMarkup()
+        empty_markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"admuser_{target_user}"))
         if message_id:
             try:
-                bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown')
+                bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown', reply_markup=empty_markup)
             except Exception:
                 pass
         else:
-            bot.send_message(chat_id, text, parse_mode='Markdown')
+            bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=empty_markup)
         return
 
     items_per_page = 5
@@ -1829,6 +1832,8 @@ def send_admin_history_page(chat_id, target_user, page, message_id=None):
     if nav_buttons:
         markup.row(*nav_buttons)
 
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"admuser_{target_user}"))
+
     if message_id:
         try:
             bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode='Markdown', reply_markup=markup)
@@ -1849,19 +1854,6 @@ def handle_admin_history_pagination(call):
 
     send_admin_history_page(call.message.chat.id, target_user, page, message_id=call.message.message_id)
     bot.answer_callback_query(call.id)
-
-@bot.message_handler(commands=['due'])
-def handle_admin_due_cmd(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "❌ You are not authorized.")
-        return
-    try:
-        args = message.text.split()
-        target_user = args[1]
-        text, markup = generate_due_query_text(target_user, 1, True)
-        bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
-    except Exception:
-        bot.reply_to(message, "⚠️ Usage: `/due <user_id>`\nExample: `/due 5763930051`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['paid'])
 def handle_admin_paid_cmd(message):
@@ -2159,6 +2151,109 @@ def handle_resetall_decision(call):
     else:
         show(f"⚠️ Reset failed for <code>{target}</code> (database error). Nothing may have been deleted fully, please check and try again.")
         bot.answer_callback_query(call.id, text="Failed")
+
+@bot.message_handler(commands=['earncheck'])
+def handle_earncheck(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        bot.reply_to(message, "Usage: /earncheck <user_id>")
+        return
+    try:
+        r = api_session.get(USER_API_URL, params={'telegram_id': args[1]}, timeout=6)
+        bot.reply_to(message, f"URL: {r.url}\nHTTP {r.status_code}\n\n{r.text[:500]}")
+    except Exception as e:
+        bot.reply_to(message, f"Request failed: {e}")
+
+# ==================== ADMIN: /user <user_id> (ইউজারের মেনু) ====================
+def md_safe(s):
+    s = str(s)
+    for ch in '_*`[]':
+        s = s.replace(ch, '')
+    return s
+
+def build_user_admin_menu(uid):
+    parts = (get_user_name(uid) or 'User').split()
+    name = md_safe(parts[0]) if parts else 'User'
+    return build_welcome_dashboard(name or 'User', uid, admin_view=True)
+
+@bot.message_handler(commands=['user'])
+def handle_admin_user_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        bot.reply_to(message, "⚠️ Usage: `/user <user_id>`\nExample: `/user 5763930051`", parse_mode='Markdown')
+        return
+
+    target = args[1]
+    if int(target) != ADMIN_ID:
+        status = get_access(target)['status']
+        if status == 'error':
+            bot.reply_to(message, "⚠️ Database error. Please try again.")
+            return
+        if status == 'none':
+            bot.reply_to(message, f"❌ No user found with ID `{target}`.", parse_mode='Markdown')
+            return
+
+    text, markup = build_user_admin_menu(target)
+    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admuser_'))
+def handle_admin_user_menu(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    uid = call.data[len('admuser_'):]
+    text, markup = build_user_admin_menu(uid)
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              parse_mode='Markdown', reply_markup=markup)
+    except Exception as e:
+        if 'not modified' not in str(e).lower():
+            bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admbank_'))
+def handle_admin_bank_view(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    uid = call.data[len('admbank_'):]
+    b = get_bank(uid)
+    name = html.escape(get_user_name(uid))
+
+    if b is None:
+        text = "⚠️ Database error. Please try again."
+    elif not b:
+        text = f"🏦 <b>BANK DETAILS - {name}</b>\n\nℹ️ This user has not added bank details yet."
+    else:
+        text = format_bank_details(b, title=f"BANK DETAILS - {name}") + f"\n🆔 User ID: <code>{html.escape(uid)}</code>"
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"admuser_{uid}"))
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              parse_mode='HTML', reply_markup=markup)
+    except Exception as e:
+        if 'not modified' not in str(e).lower():
+            bot.send_message(call.message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+    bot.answer_callback_query(call.id)
+
+# আগের /history, /due, /bank কমান্ড সরানো হয়েছে, এখন /user <user_id> এর বাটন থেকে দেখা যায়
+@bot.message_handler(commands=['history', 'due', 'bank', 'Bank'])
+def handle_removed_commands(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    bot.reply_to(
+        message,
+        "ℹ️ This command was removed. Use `/user <user_id>` and tap Purchase History / Due Query / Bank.",
+        parse_mode='Markdown'
+    )
+# ==================== END /user ====================
 
 # --- REQUEST BALANCE ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
@@ -2875,29 +2970,6 @@ def handle_bank_input(message):
         )
         st['chat_id'] = message.chat.id
         st['msg_id'] = sent.message_id
-
-@bot.message_handler(commands=['bank', 'Bank'])
-def handle_admin_bank_cmd(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "❌ You are not authorized.")
-        return
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        bot.reply_to(message, "⚠️ Usage: `/bank <user_id>`\nExample: `/bank 5763930051`", parse_mode='Markdown')
-        return
-
-    target = args[1]
-    b = get_bank(target)
-    if b is None:
-        bot.reply_to(message, "⚠️ Database error. Please try again.")
-        return
-    if not b:
-        bot.reply_to(message, f"ℹ️ User `{target}` has not added bank details yet.", parse_mode='Markdown')
-        return
-
-    name = html.escape(get_user_name(target))
-    text = format_bank_details(b, title=f"BANK DETAILS - {name}") + f"\n🆔 User ID: <code>{target}</code>"
-    bot.send_message(message.chat.id, text, parse_mode='HTML')
 
 # ---------- 3) Broadcasts (ইউজারের পাওয়া সব ব্রডকাস্ট) ----------
 BC_LABELS = {
