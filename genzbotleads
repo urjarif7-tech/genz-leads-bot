@@ -590,6 +590,7 @@ def build_welcome_dashboard(user_first_name, telegram_id, admin_view=False):
             types.InlineKeyboardButton("🏦 Bank", callback_data=f"admbank_{uid}"),
             types.InlineKeyboardButton("🔄 Refresh", callback_data=f"admuser_{uid}")
         )
+        amk.add(types.InlineKeyboardButton("❌ Close", callback_data="admclose"))
         return welcome_text, amk
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -1675,6 +1676,7 @@ def handle_admin_due_pagination(call):
     if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
         return
+    unregister_usermenu_live(call.message.chat.id, call.message.message_id)
     try:
         parts = call.data.split('_')
         target_user = parts[1]
@@ -1775,8 +1777,7 @@ def handle_admin_dashboard(message):
         "`/kick <user_id>` - Remove user (must request /start again)\n"
         "`/broadcast <user_id|all>` - Send a message to one user or everyone\n"
         "`/removedue <user_id> <YYYY-MM-DD> <amount>` - Remove one wrong due entry\n"
-        "`/resetall <user_id>` - Delete ALL data of a user (balance, due, history, bank)\n"
-        "`/earncheck <user_id>` - Test the Daily Earnings API for a user"
+        "`/resetall <user_id>` - Delete ALL data of a user (balance, due, history, bank)"
     )
     bot.send_message(message.chat.id, admin_summary, parse_mode='Markdown')
 
@@ -1847,6 +1848,7 @@ def handle_admin_history_pagination(call):
     if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
         return
+    unregister_usermenu_live(call.message.chat.id, call.message.message_id)
 
     parts = call.data.split('_')
     target_user = parts[1]
@@ -2152,20 +2154,6 @@ def handle_resetall_decision(call):
         show(f"⚠️ Reset failed for <code>{target}</code> (database error). Nothing may have been deleted fully, please check and try again.")
         bot.answer_callback_query(call.id, text="Failed")
 
-@bot.message_handler(commands=['earncheck'])
-def handle_earncheck(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split()
-    if len(args) < 2 or not args[1].isdigit():
-        bot.reply_to(message, "Usage: /earncheck <user_id>")
-        return
-    try:
-        r = api_session.get(USER_API_URL, params={'telegram_id': args[1]}, timeout=6)
-        bot.reply_to(message, f"URL: {r.url}\nHTTP {r.status_code}\n\n{r.text[:500]}")
-    except Exception as e:
-        bot.reply_to(message, f"Request failed: {e}")
-
 # ==================== ADMIN: /user <user_id> (ইউজারের মেনু) ====================
 def md_safe(s):
     s = str(s)
@@ -2177,6 +2165,75 @@ def build_user_admin_menu(uid):
     parts = (get_user_name(uid) or 'User').split()
     name = md_safe(parts[0]) if parts else 'User'
     return build_welcome_dashboard(name or 'User', uid, admin_view=True)
+
+# ---------- /user মেনু: প্রতি ৩০ সেকেন্ডে auto-refresh ----------
+USERMENU_AUTO_REFRESH_SECONDS = 30
+USERMENU_LIVE_TIMEOUT = 30 * 60   # ৩০ মিনিট কোনো বাটন না চাপলে auto-refresh বন্ধ
+USERMENU_LIVE_MAX = 5             # একসাথে সর্বোচ্চ ৫টা মেনু auto-refresh হয়
+usermenu_live = {}                # (chat_id, message_id) -> {'uid', 'last_touch'}
+usermenu_live_lock = threading.Lock()
+
+def register_usermenu_live(chat_id, message_id, uid):
+    with usermenu_live_lock:
+        usermenu_live[(chat_id, message_id)] = {'uid': str(uid), 'last_touch': time.time()}
+        while len(usermenu_live) > USERMENU_LIVE_MAX:
+            oldest = min(usermenu_live, key=lambda k: usermenu_live[k]['last_touch'])
+            usermenu_live.pop(oldest, None)
+
+def unregister_usermenu_live(chat_id, message_id):
+    with usermenu_live_lock:
+        usermenu_live.pop((chat_id, message_id), None)
+
+def usermenu_refresh_once():
+    with usermenu_live_lock:
+        snapshot = list(usermenu_live.items())
+    now = time.time()
+    for key, info in snapshot:
+        chat_id, message_id = key
+        if now - info['last_touch'] > USERMENU_LIVE_TIMEOUT:
+            unregister_usermenu_live(chat_id, message_id)
+            continue
+
+        text, markup = build_user_admin_menu(info['uid'])
+
+        # তৈরি করার সময় অ্যাডমিন অন্য পেজে (History/Due/Bank) চলে গেলে মেনু দিয়ে ঢেকে দেব না
+        with usermenu_live_lock:
+            if key not in usermenu_live:
+                continue
+        try:
+            bot.edit_message_text(text, chat_id=chat_id, message_id=message_id,
+                                  parse_mode='Markdown', reply_markup=markup)
+        except Exception as e:
+            err = str(e).lower()
+            if 'not modified' in err:
+                pass
+            elif 'not found' in err or "can't be edited" in err or 'chat not found' in err:
+                unregister_usermenu_live(chat_id, message_id)   # মেসেজ মুছে গেছে
+            else:
+                print(f"User menu auto-refresh error: {e}")
+
+def usermenu_auto_refresh_loop():
+    while True:
+        time.sleep(USERMENU_AUTO_REFRESH_SECONDS)
+        try:
+            usermenu_refresh_once()
+        except Exception as e:
+            print(f"User menu refresh loop error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'admclose')
+def handle_admin_close(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+    unregister_usermenu_live(call.message.chat.id, call.message.message_id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        try:
+            bot.edit_message_text("✖️ Closed.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        except Exception:
+            pass
+    bot.answer_callback_query(call.id)
 
 @bot.message_handler(commands=['user'])
 def handle_admin_user_cmd(message):
@@ -2199,7 +2256,8 @@ def handle_admin_user_cmd(message):
             return
 
     text, markup = build_user_admin_menu(target)
-    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    sent = bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    register_usermenu_live(message.chat.id, sent.message_id, target)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admuser_'))
 def handle_admin_user_menu(call):
@@ -2214,6 +2272,7 @@ def handle_admin_user_menu(call):
     except Exception as e:
         if 'not modified' not in str(e).lower():
             bot.send_message(call.message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    register_usermenu_live(call.message.chat.id, call.message.message_id, uid)
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admbank_'))
@@ -2221,6 +2280,7 @@ def handle_admin_bank_view(call):
     if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
         return
+    unregister_usermenu_live(call.message.chat.id, call.message.message_id)
     uid = call.data[len('admbank_'):]
     b = get_bank(uid)
     name = html.escape(get_user_name(uid))
@@ -3085,6 +3145,7 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
     threading.Thread(target=userid_auto_refresh_loop, daemon=True).start()
+    threading.Thread(target=usermenu_auto_refresh_loop, daemon=True).start()
     
     try:
         bot.remove_webhook()
