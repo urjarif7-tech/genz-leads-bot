@@ -594,18 +594,16 @@ def build_welcome_dashboard(user_first_name, telegram_id, admin_view=False):
         return welcome_text, amk
 
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_buy_proxy = types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy")
-    btn_buy_number = types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
-    btn_leads = types.InlineKeyboardButton("🎯 Live Leads", url="https://genzreward.com/555/leads")
-    btn_request = types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request")
-    btn_due_query = types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
-    btn_history = types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1")
-    
-    markup.add(btn_buy_proxy, btn_buy_number)
-    markup.add(btn_leads, btn_request)
-    markup.add(btn_due_query, btn_history)
-    markup.add(types.InlineKeyboardButton("👤 Profile", callback_data="menu_profile"))
-    
+    markup.add(
+        types.InlineKeyboardButton("🔣 Items", callback_data="menu_items"),
+        types.InlineKeyboardButton("💸 Balance", callback_data="menu_balance")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🎯 Live Leads", url="https://genzreward.com/555/leads"),
+        types.InlineKeyboardButton("👤 Profile", callback_data="menu_profile")
+    )
+    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="menu_refresh"))
+
     return welcome_text, markup
 
 # ==================== USER ACCESS APPROVAL SYSTEM ====================
@@ -871,7 +869,7 @@ def handle_buy_number_provider(call):
     )
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_durian = types.InlineKeyboardButton("ℹ️ DurianRCS", callback_data="numprov_durian")
-    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="menu_items")
     markup.add(btn_durian, btn_back)
 
     try:
@@ -1136,7 +1134,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         markup = types.InlineKeyboardMarkup(row_width=2)
         btn_block = types.InlineKeyboardButton("🚫 Block Number", callback_data=f"numblock_{token}")
         btn_again = types.InlineKeyboardButton("🔄 Purchase Again", callback_data=f"numsrv_{country_code}_{service_name}")
-        btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+        btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="menu_items")
         markup.add(btn_block, btn_again)
         markup.add(btn_back)
 
@@ -1150,7 +1148,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
         block_tokens.pop(token, None)
         text_blocked = f"🔒 Number `{num_str}` auto-blocked."
         markup_back = types.InlineKeyboardMarkup()
-        markup_back.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        markup_back.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_items"))
 
         try:
             bot.edit_message_text(text_blocked, chat_id=chat_id, message_id=msg_id, parse_mode='Markdown', reply_markup=markup_back)
@@ -1205,7 +1203,7 @@ def handle_manual_number_block(call):
 
     text = f"🔒 Number `{num_str}` blocked."
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_items"))
 
     try:
         bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
@@ -1225,7 +1223,7 @@ def generate_due_query_text(telegram_id, page=1, admin=False):
     if u_data is None:
         markup = types.InlineKeyboardMarkup()
         markup.row(types.InlineKeyboardButton("🔄 Refresh", callback_data=cb(page)))
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "go_welcome")))
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "menu_balance")))
         return "⚠️ Something went wrong. Please try again.", markup
 
     logs = u_data['due_logs']
@@ -1233,7 +1231,7 @@ def generate_due_query_text(telegram_id, page=1, admin=False):
     if not logs:
         text = "📋 **YOUR DUE SUMMARY**\n-------------------------\n❌ আপনার কোনো ব্যালেন্স এড বা Due রেকর্ড নেই।"
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "go_welcome")))
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "menu_balance")))
         return text, markup
 
     tot_due = 0.0
@@ -1286,7 +1284,7 @@ def generate_due_query_text(telegram_id, page=1, admin=False):
     if page < total_pages:
         nav.append(types.InlineKeyboardButton("Next ➡️", callback_data=cb(page + 1)))
     markup.row(*nav)
-    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "go_welcome")))
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=(f"admuser_{uid}" if admin else "menu_balance")))
 
     return text, markup
 
@@ -1298,7 +1296,7 @@ def handle_buy_proxy(call):
     
     btn_cliproxy = types.InlineKeyboardButton("🌐 Cliproxy (States)", callback_data="prov_cliproxy")
     btn_711proxy = types.InlineKeyboardButton("🚀 711 Proxy (States)", callback_data="prov_711proxy")
-    btn_back = types.InlineKeyboardButton("⬅️ Back", callback_data="go_welcome")
+    btn_back = types.InlineKeyboardButton("⬅️ Back", callback_data="menu_items")
 
     markup.add(btn_cliproxy, btn_711proxy, btn_back)
     try:
@@ -1523,7 +1521,7 @@ def process_proxy_purchase(call, kind, state_name, quantity):
         fail_markup = types.InlineKeyboardMarkup(row_width=1)
         fail_markup.add(
             types.InlineKeyboardButton(cfg['states_btn'], callback_data=cfg['states_cb']),
-            types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+            types.InlineKeyboardButton("🔙 Back", callback_data="menu_items")
         )
 
         show_page(call, "⏳ Checking proxies, please wait...", None)
@@ -1579,7 +1577,7 @@ def process_proxy_purchase(call, kind, state_name, quantity):
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton(cfg['states_btn'], callback_data=cfg['states_cb']),
-            types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome")
+            types.InlineKeyboardButton("🔙 Back", callback_data="menu_items")
         )
         bot.send_message(chat_id, summary_text, parse_mode='Markdown', reply_markup=markup)
     finally:
@@ -1710,7 +1708,7 @@ def handle_user_history(call):
     if not history_list:
         text = "📜 **PURCHASE HISTORY**\n\n❌ আপনি এখনো কোনো আইটেম কেনেননি।"
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_balance"))
     else:
         items_per_page = 5
         total_items = len(history_list)
@@ -1746,7 +1744,7 @@ def handle_user_history(call):
         if nav_buttons:
             markup.row(*nav_buttons)
 
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_balance"))
 
     try:
         bot.edit_message_text(
@@ -3122,10 +3120,9 @@ def build_profile_menu():
     text = "👤 <b>PROFILE</b>\n\nChoose an option:"
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🧾 Pay Due", callback_data="prof_paydue"),
-        types.InlineKeyboardButton("🏦 Add Bank", callback_data="prof_bank")
+        types.InlineKeyboardButton("🏦 Add Bank", callback_data="prof_bank"),
+        types.InlineKeyboardButton("📢 Broadcasts", callback_data="userbc_1")
     )
-    markup.add(types.InlineKeyboardButton("📢 Broadcasts", callback_data="userbc_1"))
     markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
     return text, markup
 
@@ -3152,7 +3149,7 @@ def handle_paydue_start(call):
 @bot.callback_query_handler(func=lambda call: call.data == 'paydue_cancel')
 def handle_paydue_cancel(call):
     paydue_states.pop(call.from_user.id, None)
-    show_page(call, "❌ Payment request cancelled.", profile_back_markup())
+    show_page(call, "❌ Payment request cancelled.", balance_back_markup())
     bot.answer_callback_query(call.id, text="Cancelled!")
 
 @bot.message_handler(func=lambda m: m.from_user.id in paydue_states and not (m.text or '').startswith('/'))
@@ -3189,7 +3186,7 @@ def handle_paydue_amount(message):
             bot.edit_message_reply_markup(state['chat_id'], state['msg_id'], reply_markup=None)
         except Exception:
             pass
-    bot.reply_to(message, f"✅ Your payment of {amt} TK has been sent to the admin.", reply_markup=profile_back_markup())
+    bot.reply_to(message, f"✅ Your payment of {amt} TK has been sent to the admin.", reply_markup=balance_back_markup())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pdc_'))
 def handle_paydue_admin_cancel(call):
@@ -3428,11 +3425,72 @@ def handle_user_broadcasts(call):
     bot.answer_callback_query(call.id)
 # ==================== END PROFILE MENU ====================
 
-@bot.callback_query_handler(func=lambda call: call.data == 'go_welcome')
+# ==================== MENU PAGES: 🔣 Items / 💸 Balance ====================
+def today_spend_of(u_data):
+    _now = bd_now()
+    days = (_now.strftime("%Y-%m-%d"), _now.strftime("%d/%m/%Y"))
+    return sum(_f(e.get('cost')) for e in u_data.get('purchases', []) if e.get('date') in days)
+
+def build_summary_header(title, uid):
+    u = get_user_db(uid)
+    return (
+        f"{title}\n\n"
+        f"────────────────────────\n"
+        f"💳 `Balance: {_f(u.get('balance'))} TK`\n"
+        f"────────────────────────\n"
+        f"📤 `Daily Spend: {today_spend_of(u)} TK`\n"
+        f"────────────────────────\n\n"
+    )
+
+def build_items_page(uid):
+    text = build_summary_header("🔣 **ITEMS**", uid) + "Choose what you want to buy 👇"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy"),
+        types.InlineKeyboardButton("📱 Buy Number", callback_data="menu_buy_number")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    return text, markup
+
+def build_balance_page(uid):
+    text = build_summary_header("💸 **BALANCE**", uid) + "Choose an option 👇"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📜 Purchase History", callback_data="historypage_1"),
+        types.InlineKeyboardButton("📋 Due Query", callback_data="due_query")
+    )
+    markup.add(
+        types.InlineKeyboardButton("📝 Request Balance", callback_data="menu_request"),
+        types.InlineKeyboardButton("🧾 Pay Due", callback_data="prof_paydue")
+    )
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    return text, markup
+
+def balance_back_markup():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_balance"))
+    return markup
+
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_items')
+def handle_menu_items(call):
+    text, markup = build_items_page(call.from_user.id)
+    show_page(call, text, markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_balance')
+def handle_menu_balance(call):
+    text, markup = build_balance_page(call.from_user.id)
+    show_page(call, text, markup, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+# ==================== END MENU PAGES ====================
+
+
+@bot.callback_query_handler(func=lambda call: call.data in ('go_welcome', 'menu_refresh'))
 def handle_back_to_welcome(call):
     active_messages.pop(call.message.chat.id, None)
     welcome_text, markup = build_welcome_dashboard(call.from_user.first_name or "User", call.from_user.id)
-    
+    note = "🔄 Refreshed" if call.data == 'menu_refresh' else None
+
     try:
         if call.message.content_type == 'photo':
             bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -3445,9 +3503,15 @@ def handle_back_to_welcome(call):
                 parse_mode='Markdown',
                 reply_markup=markup
             )
-    except Exception:
-        bot.send_message(call.message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
-    bot.answer_callback_query(call.id)
+    except Exception as e:
+        if 'not modified' in str(e).lower():
+            note = "✅ Already up to date" if call.data == 'menu_refresh' else None
+        else:
+            bot.send_message(call.message.chat.id, welcome_text, parse_mode='Markdown', reply_markup=markup)
+    if note:
+        bot.answer_callback_query(call.id, text=note)
+    else:
+        bot.answer_callback_query(call.id)
 
 @app.route('/')
 def home():
