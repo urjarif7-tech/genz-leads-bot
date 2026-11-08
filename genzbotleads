@@ -595,14 +595,17 @@ def build_welcome_dashboard(user_first_name, telegram_id, admin_view=False):
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🔣 Items", callback_data="menu_items"),
+        types.InlineKeyboardButton("🔣 Buy Items", callback_data="menu_items"),
         types.InlineKeyboardButton("💸 Balance", callback_data="menu_balance")
     )
     markup.add(
         types.InlineKeyboardButton("🎯 Live Leads", url="https://genzreward.com/555/leads"),
         types.InlineKeyboardButton("👤 Profile", callback_data="menu_profile")
     )
-    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="menu_refresh"))
+    markup.add(
+        types.InlineKeyboardButton("📨 Message Admin", callback_data="menu_msgadmin"),
+        types.InlineKeyboardButton("🔄 Refresh", callback_data="menu_refresh")
+    )
 
     return welcome_text, markup
 
@@ -2066,6 +2069,7 @@ def perform_user_reset(target):
             db_run("DELETE FROM users WHERE telegram_id = ?", [key]),
             db_run("DELETE FROM bank WHERE telegram_id = ?", [key]),
             db_run("DELETE FROM broadcasts WHERE telegram_id = ?", [key]),
+            db_run("DELETE FROM broadcasts WHERE telegram_id = ? AND content_type = 'user_message' AND body LIKE ?", [str(ADMIN_ID), '%"uid": "' + key + '"%']),
         ]
         if any(r is None for r in results):
             return False
@@ -3027,6 +3031,7 @@ import math
 
 paydue_states = {}   # user_id -> {'chat_id': .., 'msg_id': ..}
 bank_states = {}     # user_id -> {'step': n, 'data': {...}, 'chat_id': .., 'msg_id': ..}
+msgadmin_states = {}  # user_id -> {'chat_id': .., 'msg_id': ..}  (Message Admin এ লেখার অপেক্ষায়)
 
 BANK_FIELDS = [
     ('bank_name', 'Bank Name'),
@@ -3063,6 +3068,7 @@ def clear_user_flows(uid):
     admin_states.pop(uid, None)
     paydue_states.pop(uid, None)
     bank_states.pop(uid, None)
+    msgadmin_states.pop(uid, None)
 
 def _clear_flows_cb(c):
     # অন্য যেকোনো বাটন চাপলে অসম্পূর্ণ ইনপুট (Pay Due / Bank / Request Balance) বাতিল হয়
@@ -3364,6 +3370,45 @@ def fit_text(body, limit=1200, max_escaped=3000):
         cut = True
     return esc + ('…' if cut else '')
 
+def _bc_entry(ts, ctype, body):
+    head = f"🕒 {fmt_bd_time(ts)}"
+    if ctype == 'user_message':
+        try:
+            d = json.loads(body or '{}')
+            if not isinstance(d, dict):
+                d = {}
+        except Exception:
+            d = {}
+        name = html.escape(str(d.get('name') or 'Unknown'))
+        uid_s = html.escape(str(d.get('uid') or ''))
+        text = fit_text(str(d.get('text') or ''), limit=2500, max_escaped=3000)
+        return f"{head}\n📨 <b>{name}</b>  •  🆔 <code>{uid_s}</code>\n💬 {text}"
+    label = BC_LABELS.get(ctype)
+    if label:
+        head += f"\n[{label}]"
+    text_part = fit_text(body)
+    return head + ("\n" + text_part if text_part else "")
+
+def _bc_pack(entries, max_pages=None):
+    """প্রতি পেজে সর্বোচ্চ ৫টা এন্ট্রি আর Telegram এর লেখার সীমা মেনে পেজ বানায়।
+    max_pages দিলে ওই পেজে যতটা ধরে ততটাই রাখে। (pages, রাখা এন্ট্রির সংখ্যা)"""
+    pages = []
+    cur = []
+    cur_len = 0
+    kept = 0
+    for e in entries:
+        if cur and (len(cur) >= 5 or cur_len + len(e) > 3400):
+            if max_pages and len(pages) + 2 > max_pages:
+                break
+            pages.append(cur)
+            cur, cur_len = [], 0
+        cur.append(e)
+        cur_len += len(e)
+        kept += 1
+    if cur:
+        pages.append(cur)
+    return pages, kept
+
 def build_user_broadcasts_page(uid, page):
     rows = db_run(
         "SELECT ts, content_type, body FROM broadcasts WHERE telegram_id = ? ORDER BY ts DESC, id DESC LIMIT 100",
@@ -3378,27 +3423,9 @@ def build_user_broadcasts_page(uid, page):
         markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="menu_profile"))
         return "📢 <b>BROADCASTS</b>\n\n❌ No broadcasts yet.", markup
 
-    entries = []
-    for ts, ctype, body in rows:
-        head = f"🕒 {fmt_bd_time(ts)}"
-        label = BC_LABELS.get(ctype)
-        if label:
-            head += f"\n[{label}]"
-        text_part = fit_text(body)
-        entries.append(head + ("\n" + text_part if text_part else ""))
-
-    # প্রতি পেজে সর্বোচ্চ ৫টা, আর Telegram এর লেখার সীমা পার না করে
-    pages = []
-    cur = []
-    cur_len = 0
-    for e in entries:
-        if cur and (len(cur) >= 5 or cur_len + len(e) > 3400):
-            pages.append(cur)
-            cur, cur_len = [], 0
-        cur.append(e)
-        cur_len += len(e)
-    if cur:
-        pages.append(cur)
+    entries = [_bc_entry(int(ts or 0), ctype, body) for ts, ctype, body in rows]
+    max_pages = ADMIN_INBOX_MAX_PAGES if str(uid) == str(ADMIN_ID) else None
+    pages, _ = _bc_pack(entries, max_pages)
 
     total = len(pages)
     page = max(1, min(page, total))
@@ -3443,7 +3470,7 @@ def build_summary_header(title, uid):
     )
 
 def build_items_page(uid):
-    text = build_summary_header("🔣 **ITEMS**", uid) + "Choose what you want to buy 👇"
+    text = build_summary_header("🔣 **BUY ITEMS**", uid) + "Choose what you want to buy 👇"
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🌐 Buy Proxy", callback_data="menu_buy_proxy"),
@@ -3483,6 +3510,105 @@ def handle_menu_balance(call):
     show_page(call, text, markup, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 # ==================== END MENU PAGES ====================
+
+# ==================== 📨 MESSAGE ADMIN ====================
+ADMIN_INBOX_MAX_PAGES = 5            # অ্যাডমিনের Broadcasts পেজে সর্বোচ্চ ৫ পেজ সেভ থাকে
+admin_inbox_lock = threading.Lock()
+
+def user_full_name(user):
+    return f"{user.first_name or ''} {user.last_name or ''}".strip() or "Unknown"
+
+def trim_admin_inbox():
+    """অ্যাডমিনের Broadcasts এ ৫ পেজের বেশি যা আছে তা ডাটাবেস থেকে মুছে দেয়।"""
+    rows = db_run(
+        "SELECT id, ts, content_type, body FROM broadcasts WHERE telegram_id = ? ORDER BY ts DESC, id DESC LIMIT 200",
+        [str(ADMIN_ID)]
+    )
+    if not rows:
+        return
+    entries = [_bc_entry(int(r[1] or 0), r[2], r[3]) for r in rows]
+    _, kept = _bc_pack(entries, ADMIN_INBOX_MAX_PAGES)
+    if 0 < kept < len(rows):
+        keep_ids = [int(r[0]) for r in rows[:kept]]
+        marks = ",".join("?" * len(keep_ids))
+        db_run(f"DELETE FROM broadcasts WHERE telegram_id = ? AND id NOT IN ({marks})", [str(ADMIN_ID)] + keep_ids)
+
+def save_user_message_for_admin(user_id, name, text):
+    body = json.dumps({'name': name, 'uid': str(user_id), 'text': text}, ensure_ascii=False)
+    with admin_inbox_lock:
+        res = db_run(
+            "INSERT INTO broadcasts (telegram_id, ts, content_type, body) VALUES (?, ?, ?, ?)",
+            [str(ADMIN_ID), int(time.time()), 'user_message', body]
+        )
+        trim_admin_inbox()
+    return res is not None
+
+def deliver_message_to_admin(user, text):
+    """অ্যাডমিনকে নাম, আইডি, সময় আর মেসেজ পাঠায়। লম্বা হলে একাধিক মেসেজে ভাগ করে। প্রথমটা গেলে True।"""
+    name = html.escape(user_full_name(user))
+    header = (
+        "📨 <b>NEW MESSAGE</b>\n\n"
+        f"👤 Name: {name}\n"
+        f"🆔 User ID: <code>{user.id}</code>\n"
+        f"🕒 {fmt_bd_time(time.time())}\n\n"
+    )
+    chunks = _chatlog_chunks(text)
+    for i, piece in enumerate(chunks):
+        if i == 0:
+            prefix = header
+        else:
+            prefix = f"📨 <b>NEW MESSAGE</b> (part {i + 1}/{len(chunks)})\n🆔 <code>{user.id}</code>\n\n"
+        try:
+            bot.send_message(ADMIN_ID, prefix + "💬 " + html.escape(piece, quote=False), parse_mode='HTML')
+        except Exception as e:
+            print(f"Deliver message to admin error: {e}")
+            if i == 0:
+                return False
+    return True
+
+@bot.callback_query_handler(func=lambda call: call.data == 'menu_msgadmin')
+def handle_msgadmin_start(call):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="msgadmin_cancel"))
+    sent = bot.send_message(call.message.chat.id, "📨 What would you like to say to the admin?", reply_markup=markup)
+    msgadmin_states[call.from_user.id] = {'chat_id': call.message.chat.id, 'msg_id': sent.message_id}
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'msgadmin_cancel')
+def handle_msgadmin_cancel(call):
+    msgadmin_states.pop(call.from_user.id, None)
+    try:
+        bot.edit_message_text("❌ Message cancelled.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+        bot.answer_callback_query(call.id, text="Cancelled!")
+    except Exception:
+        bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda m: m.from_user.id in msgadmin_states and not (m.text or '').startswith('/'))
+def handle_msgadmin_text(message):
+    uid = message.from_user.id
+    state = msgadmin_states.get(uid)
+    text = (message.text or '').strip()
+    if not text:
+        return
+
+    if not deliver_message_to_admin(message.from_user, text):
+        bot.reply_to(message, "⚠️ Could not send your message to the admin. Please try again later.")
+        return
+
+    msgadmin_states.pop(uid, None)
+    if state:
+        try:
+            bot.edit_message_reply_markup(state['chat_id'], state['msg_id'], reply_markup=None)
+        except Exception:
+            pass
+
+    save_user_message_for_admin(uid, user_full_name(message.from_user), text)
+
+    back = types.InlineKeyboardMarkup()
+    back.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_welcome"))
+    bot.reply_to(message, "✅ Your message has been sent to the admin.", reply_markup=back)
+# ==================== END MESSAGE ADMIN ====================
+
 
 
 @bot.callback_query_handler(func=lambda call: call.data in ('go_welcome', 'menu_refresh'))
