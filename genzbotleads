@@ -1531,29 +1531,31 @@ def process_proxy_purchase(call, kind, state_name, quantity):
             show_page(call, "⚠️ Database error. You were not charged. Please try again.", fail_markup)
             return
 
-        proxy_display_text = "\n".join(u for u, _ in good)
-        details_display_text = "\n".join(fmt_proxy_detail(info, state_name) for _, info in good)
-
-        caption = (
-            f"✅ **{cfg['title']} VERIFIED & CHARGED ({count}/{quantity})**\n\n"
-            f"💳 Charged: {cost} TK\n"
-            f"{cfg['line'].format(state=state_name)}\n"
-            f"{details_display_text}\n\n"
-            f"`{proxy_display_text}`"
-        )
-
         try:
             bot.delete_message(chat_id, call.message.message_id)
         except Exception:
             pass
 
-        send_proxy_result(chat_id, make_qr_png(proxy_display_text), caption)
+        # প্রতিটা proxy আলাদা QR আর আলাদা মেসেজে পাঠানো হয়
+        for i, (proxy_url, info) in enumerate(good, start=1):
+            caption = (
+                f"✅ **{cfg['title']} {i}/{count} VERIFIED**\n\n"
+                f"{cfg['line'].format(state=state_name)}\n"
+                f"{fmt_proxy_detail(info, state_name)}\n\n"
+                f"`{proxy_url}`"
+            )
+            send_proxy_result(chat_id, make_qr_png(proxy_url), caption)
+            if i < count:
+                time.sleep(0.3)
 
         summary_text = (
             f"────────────────────────\n"
-            f"💳 Total Charged: {cost} TK\n\n"
-            f"Remaining Balance: {new_bal} TK"
+            f"✅ Delivered: {count}/{quantity}\n"
+            f"💳 Total Charged: {cost} TK\n"
         )
+        if count < quantity:
+            summary_text += f"⚠️ Only {count} of {quantity} proxies were working, so you were charged for {count} only.\n"
+        summary_text += f"\nRemaining Balance: {new_bal} TK"
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             types.InlineKeyboardButton(cfg['states_btn'], callback_data=cfg['states_cb']),
