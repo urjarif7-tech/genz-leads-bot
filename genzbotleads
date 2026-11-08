@@ -915,19 +915,7 @@ def handle_durian_service_select(call):
         f"Select a service:"
     )
 
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    b_super = types.InlineKeyboardButton("Super - 10.0 TK", callback_data=f"numsrv_{country_code}_Super")
-    b_fetch = types.InlineKeyboardButton("Fetch - 12.0 TK", callback_data=f"numsrv_{country_code}_Fetch")
-    b_pogo = types.InlineKeyboardButton("Pogo - 14.0 TK", callback_data=f"numsrv_{country_code}_Pogo")
-    b_reco = types.InlineKeyboardButton("Reco - 16.0 TK", callback_data=f"numsrv_{country_code}_Reco")
-    b_inbox = types.InlineKeyboardButton("InboxDollar - 14.0 TK", callback_data=f"numsrv_{country_code}_InboxDollar")
-    b_copper = types.InlineKeyboardButton("Copper - 20.0 TK", callback_data=f"numsrv_{country_code}_Copper")
-    btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="numprov_durian")
-
-    markup.add(b_super, b_fetch)
-    markup.add(b_pogo, b_reco)
-    markup.add(b_inbox, b_copper)
-    markup.add(btn_back)
+    markup = build_service_markup(country_code)
 
     bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode='Markdown', reply_markup=markup)
     bot.answer_callback_query(call.id)
@@ -1168,19 +1156,7 @@ def poll_durian_sms(chat_id, msg_id, num_str, order_id, service_name, price, cou
             f"Number auto-blocked. You were not charged.\n\n"
             f"Buy another number."
         )
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        b_super = types.InlineKeyboardButton("Super - 10.0 TK", callback_data=f"numsrv_{country_code}_Super")
-        b_fetch = types.InlineKeyboardButton("Fetch - 12.0 TK", callback_data=f"numsrv_{country_code}_Fetch")
-        b_pogo = types.InlineKeyboardButton("Pogo - 14.0 TK", callback_data=f"numsrv_{country_code}_Pogo")
-        b_reco = types.InlineKeyboardButton("Reco - 16.0 TK", callback_data=f"numsrv_{country_code}_Reco")
-        b_inbox = types.InlineKeyboardButton("InboxDollar - 14.0 TK", callback_data=f"numsrv_{country_code}_InboxDollar")
-        b_copper = types.InlineKeyboardButton("Copper - 20.0 TK", callback_data=f"numsrv_{country_code}_Copper")
-        btn_back = types.InlineKeyboardButton("🔙 Back", callback_data="numprov_durian")
-
-        markup.add(b_super, b_fetch)
-        markup.add(b_pogo, b_reco)
-        markup.add(b_inbox, b_copper)
-        markup.add(btn_back)
+        markup = build_service_markup(country_code)
 
         try:
             bot.edit_message_text(text_noblock, chat_id=chat_id, message_id=msg_id, parse_mode='Markdown', reply_markup=markup)
@@ -1315,7 +1291,7 @@ def handle_cliproxy_states(call):
     text = (
         f"🌐 **CLIPROXY (STATES)**\n\n"
         f"💳 Balance: {balance} TK\n"
-        f"💰 Per successful request: 5.0 TK\n\n"
+        f"💰 Per successful request: {proxy_price('clip')} TK\n\n"
         f"You're only charged if the proxy actually works — select a state:"
     )
 
@@ -1344,7 +1320,7 @@ def handle_state_quantity(call):
     text = (
         f"🌐 **{state_name}, United States**\n\n"
         f"💳 Balance: {balance} TK\n"
-        f"💰 5.0 TK per successful IP\n\n"
+        f"💰 {proxy_price('clip')} TK per successful IP\n\n"
         f"How many IPs do you want?"
     )
 
@@ -1507,11 +1483,12 @@ PROXY_KINDS = {
 
 def process_proxy_purchase(call, kind, state_name, quantity):
     cfg = PROXY_KINDS[kind]
+    unit_price = proxy_price(kind)
     uid = call.from_user.id
     chat_id = call.message.chat.id
 
-    if get_available_balance(uid) < quantity * PROXY_UNIT_PRICE:
-        bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {quantity * PROXY_UNIT_PRICE} TK", show_alert=True)
+    if get_available_balance(uid) < quantity * unit_price:
+        bot.answer_callback_query(call.id, text=f"❌ Insufficient balance! Required: {quantity * unit_price} TK", show_alert=True)
         return
 
     if not acquire_busy(uid):
@@ -1544,7 +1521,7 @@ def process_proxy_purchase(call, kind, state_name, quantity):
             return
 
         count = len(good)
-        cost = count * PROXY_UNIT_PRICE
+        cost = count * unit_price
         new_bal = charge_user(uid, cost, f"{cfg['label']} ({state_name})", count)
 
         if new_bal is False:
@@ -1607,7 +1584,7 @@ def handle_711proxy_states(call):
     text = (
         f"🚀 **711 PROXY (STATES)**\n\n"
         f"💳 Balance: {balance} TK\n"
-        f"💰 Per successful request: 5.0 TK\n\n"
+        f"💰 Per successful request: {proxy_price('711')} TK\n\n"
         f"You're only charged if the proxy actually works — select a state:"
     )
 
@@ -1636,7 +1613,7 @@ def handle_711_quantity(call):
     text = (
         f"🚀 **{state_name}, United States (711 Proxy)**\n\n"
         f"💳 Balance: {balance} TK\n"
-        f"💰 5.0 TK per successful IP\n\n"
+        f"💰 {proxy_price('711')} TK per successful IP\n\n"
         f"How many IPs do you want?"
     )
 
@@ -1776,6 +1753,7 @@ def handle_admin_dashboard(message):
         "`/adddue <user_id> <amount>` - Directly add due\n"
         "`/userid` - All users list with last active time\n"
         "`/allchat` - See what users are writing (last 5 pages)\n"
+        "`/prices` - Change item prices (numbers and proxy)\n"
         "`/kick <user_id>` - Remove user (must request /start again)\n"
         "`/broadcast <user_id|all>` - Send a message to one user or everyone\n"
         "`/removedue <user_id> <YYYY-MM-DD> <amount>` - Remove one wrong due entry\n"
@@ -2629,6 +2607,201 @@ def handle_allchat_close(call):
     bot.answer_callback_query(call.id)
 # ==================== END /allchat ====================
 
+# ==================== ADMIN: /prices (আইটেমের দাম বদলানো) ====================
+PROXY_PRICES = {'clip': 5.0, '711': 5.0}          # প্রতি IP এর দাম
+PROXY_PRICE_LABELS = {'clip': 'Cliproxy', '711': '711 Proxy'}
+PRICE_MAX = 100000.0
+price_states = {}   # ADMIN_ID -> {'kind': 'n' | 'p', 'key': .., 'chat_id': .., 'msg_id': ..}
+
+db_run('''
+    CREATE TABLE IF NOT EXISTS prices (
+        item TEXT PRIMARY KEY,
+        price REAL
+    )
+''')
+
+def proxy_price(kind):
+    return PROXY_PRICES.get(kind, 5.0)
+
+def load_prices():
+    """ডাটাবেসে সেভ করা দাম মেমরিতে আনে। সফল হলে True।"""
+    rows = db_run("SELECT item, price FROM prices")
+    if rows is None:
+        return False
+    for item, price in rows:
+        try:
+            v = float(price)
+        except Exception:
+            continue
+        if item in SERVICES_PRICES:
+            SERVICES_PRICES[item] = v
+        elif item.startswith('proxy_') and item[6:] in PROXY_PRICES:
+            PROXY_PRICES[item[6:]] = v
+    return True
+
+def _prices_loader():
+    # ডাটাবেস না পেলে ৩০ সেকেন্ড পর পর আবার চেষ্টা করে, যাতে সেভ করা দাম হারিয়ে ডিফল্ট দামে না চলে
+    while not load_prices():
+        time.sleep(30)
+
+threading.Thread(target=_prices_loader, daemon=True).start()
+
+def build_service_markup(country_code):
+    """নম্বরের সার্ভিসের বাটন (বর্তমান দামসহ)।"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        types.InlineKeyboardButton(f"{name} - {float(price)} TK", callback_data=f"numsrv_{country_code}_{name}")
+        for name, price in SERVICES_PRICES.items()
+    ]
+    for i in range(0, len(buttons), 2):
+        markup.add(*buttons[i:i + 2])
+    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="numprov_durian"))
+    return markup
+
+def price_item_label(kind, key):
+    return key if kind == 'n' else PROXY_PRICE_LABELS.get(key, key)
+
+def price_item_current(kind, key):
+    return SERVICES_PRICES.get(key) if kind == 'n' else PROXY_PRICES.get(key)
+
+def build_prices_page(note=None):
+    lines = ["💰 <b>PRICES</b>", "━━━━━━━━━━━━━━━━━━━━", ""]
+    if note:
+        lines += [note, ""]
+    lines.append("📱 <b>Numbers</b> (per number)")
+    for name, price in SERVICES_PRICES.items():
+        lines.append(f"•  {name}  —  <b>{float(price)} TK</b>")
+    lines += ["", "🌐 <b>Proxy</b> (per IP)"]
+    for key, label in PROXY_PRICE_LABELS.items():
+        lines.append(f"•  {label}  —  <b>{float(PROXY_PRICES[key])} TK</b>")
+    lines += ["", "Tap an item to change its price 👇"]
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    num_buttons = [types.InlineKeyboardButton(f"✏️ {name}", callback_data=f"prc_n_{name}") for name in SERVICES_PRICES]
+    for i in range(0, len(num_buttons), 2):
+        markup.add(*num_buttons[i:i + 2])
+    markup.add(*[types.InlineKeyboardButton(f"✏️ {label}", callback_data=f"prc_p_{key}")
+                 for key, label in PROXY_PRICE_LABELS.items()])
+    markup.add(types.InlineKeyboardButton("❌ Close", callback_data="prc_close"))
+    return "\n".join(lines), markup
+
+def parse_price(text):
+    try:
+        v = float((text or '').replace(',', '').strip().lower().replace('tk', '').strip())
+    except Exception:
+        return None
+    if not math.isfinite(v) or v <= 0 or v > PRICE_MAX:
+        return None
+    return round(v, 2)
+
+def set_price(kind, key, value):
+    """ডাটাবেসে সেভ হলেই মেমরির দাম বদলায়। (সফল?, আগের দাম)"""
+    item = key if kind == 'n' else f"proxy_{key}"
+    old = price_item_current(kind, key)
+    if db_run("INSERT OR REPLACE INTO prices (item, price) VALUES (?, ?)", [item, float(value)]) is None:
+        return False, old
+    if kind == 'n':
+        SERVICES_PRICES[key] = float(value)
+    else:
+        PROXY_PRICES[key] = float(value)
+    return True, old
+
+@bot.message_handler(commands=['prices'])
+def handle_prices_cmd(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ You are not authorized.")
+        return
+    text, markup = build_prices_page()
+    bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+
+def _prices_show(call, text, markup):
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              parse_mode='HTML', reply_markup=markup)
+    except Exception as e:
+        if 'not modified' not in str(e).lower():
+            bot.send_message(call.message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('prc_'))
+def handle_prices_callback(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, text="Unauthorized!", show_alert=True)
+        return
+
+    parts = call.data.split('_', 2)
+    action = parts[1] if len(parts) > 1 else ''
+
+    if action == 'list':
+        price_states.pop(ADMIN_ID, None)
+        text, markup = build_prices_page()
+        _prices_show(call, text, markup)
+        bot.answer_callback_query(call.id)
+        return
+
+    if action == 'close':
+        price_states.pop(ADMIN_ID, None)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            try:
+                bot.edit_message_text("✖️ Closed.", chat_id=call.message.chat.id, message_id=call.message.message_id)
+            except Exception:
+                pass
+        bot.answer_callback_query(call.id)
+        return
+
+    if action in ('n', 'p') and len(parts) == 3:
+        key = parts[2]
+        if price_item_current(action, key) is None:
+            bot.answer_callback_query(call.id, text="Unknown item.", show_alert=True)
+            return
+        broadcast_states.pop(ADMIN_ID, None)   # যাতে লেখা দামটা ভুল করে ব্রডকাস্ট না হয়
+        price_states[ADMIN_ID] = {'kind': action, 'key': key,
+                                  'chat_id': call.message.chat.id, 'msg_id': call.message.message_id}
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="prc_list"))
+        text = (
+            f"✏️ <b>{html.escape(price_item_label(action, key))}</b>\n"
+            f"Current price: <b>{float(price_item_current(action, key))} TK</b>\n\n"
+            "Send the new price (a number, for example <code>12</code>)."
+        )
+        _prices_show(call, text, markup)
+        bot.answer_callback_query(call.id)
+        return
+
+    bot.answer_callback_query(call.id)
+
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and ADMIN_ID in price_states
+                     and not (m.text or '').startswith('/'))
+def handle_price_input(message):
+    st = price_states.get(ADMIN_ID)
+    if not st:
+        return
+    value = parse_price(message.text)
+    if value is None:
+        bot.reply_to(message, "⚠️ Please send a valid price: a number greater than 0. Example: 12")
+        return
+
+    ok, old = set_price(st['kind'], st['key'], value)
+    if not ok:
+        bot.reply_to(message, "⚠️ Database error. The price was NOT changed. Please try again.")
+        return
+
+    price_states.pop(ADMIN_ID, None)
+    label = html.escape(price_item_label(st['kind'], st['key']))
+    note = f"✅ <b>{label}</b>: {float(old)} → <b>{float(value)} TK</b>"
+    text, markup = build_prices_page(note=note)
+    try:
+        bot.edit_message_text(text, chat_id=st['chat_id'], message_id=st['msg_id'],
+                              parse_mode='HTML', reply_markup=markup)
+    except Exception:
+        bot.send_message(message.chat.id, text, parse_mode='HTML', reply_markup=markup)
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+    except Exception:
+        pass
+# ==================== END /prices ====================
+
 # --- REQUEST BALANCE ---
 @bot.callback_query_handler(func=lambda call: call.data == 'menu_request')
 def handle_request_balance(call):
@@ -3069,6 +3242,7 @@ def clear_user_flows(uid):
     paydue_states.pop(uid, None)
     bank_states.pop(uid, None)
     msgadmin_states.pop(uid, None)
+    price_states.pop(uid, None)
 
 def _clear_flows_cb(c):
     # অন্য যেকোনো বাটন চাপলে অসম্পূর্ণ ইনপুট (Pay Due / Bank / Request Balance) বাতিল হয়
