@@ -13,21 +13,21 @@ from collections import defaultdict
 from flask import Flask
 from telebot import TeleBot, types
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809930723:AAHI5WoHPl_dBSUHUYLZmajhJWZfH8nphpE')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '').strip()
 API_URL = 'https://genzreward.com/api/live-leads-bot'
 USER_API_URL = 'https://genzreward.com/api/user-dashboard'
 
 # Cliproxy API Credentials
-CLIPROXY_KEY = "meuzhwp5jvtq964uavqr"
+CLIPROXY_KEY = os.environ.get('CLIPROXY_KEY', '').strip()
 
 # Trustsource API & Credentials (711 Proxy)
-TRUSTSOURCE_USERNAME = "USER702036"
-TRUSTSOURCE_PASSWORD = "60b3d6"
-TRUSTSOURCE_HOST = "global.rotip.trustsource.live"
-TRUSTSOURCE_PORT = "20000"
+TRUSTSOURCE_USERNAME = os.environ.get('TRUSTSOURCE_USERNAME', '').strip()
+TRUSTSOURCE_PASSWORD = os.environ.get('TRUSTSOURCE_PASSWORD', '').strip()
+TRUSTSOURCE_HOST = os.environ.get('TRUSTSOURCE_HOST', 'global.rotip.trustsource.live').strip()
+TRUSTSOURCE_PORT = os.environ.get('TRUSTSOURCE_PORT', '20000').strip()
 
 # DurianRCS API Credentials
-DURIANRCS_API_KEY = os.environ.get('DURIANRCS_API_KEY', 'RlBhbDBkMXZlcDc0ZGdFTVRJMnJVdz09')
+DURIANRCS_API_KEY = os.environ.get('DURIANRCS_API_KEY', '').strip()
 DURIAN_BASE_URL = "https://durianrcs.com/api"
 
 # Turso Database Credentials
@@ -35,6 +35,15 @@ TURSO_URL = os.environ.get('TURSO_DATABASE_URL', '')
 TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
 
 # --- Configuration ---
+
+# --- গোপন তথ্য (token/key) কোডে নেই, Render এর Environment Variables থেকে আসে ---
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN is missing. Set it in Render > Environment, then redeploy.")
+    raise SystemExit(1)
+for _name in ('CLIPROXY_KEY', 'TRUSTSOURCE_USERNAME', 'TRUSTSOURCE_PASSWORD', 'DURIANRCS_API_KEY'):
+    if not globals().get(_name):
+        print(f"⚠️ {_name} is not set. The feature that needs it will not work until you add it in Render > Environment.")
+
 ADMIN_ID = 7089010379
 
 bot = TeleBot(BOT_TOKEN, threaded=True, num_threads=8)
@@ -1338,9 +1347,15 @@ def handle_state_quantity(call):
 # ==================== PROXY PURCHASE (verified before charge) ====================
 PROXY_UNIT_PRICE = 5.0
 
-def verify_proxy(proxy_url, timeout=8):
+def _scrub(msg):
+    """লগে ইউজারনেম/পাসওয়ার্ড যেন না যায়।"""
+    import re
+    return re.sub(r'//[^/@\s]+@', '//***@', str(msg))
+
+def verify_proxy(proxy_url, timeout=10):
     """প্রক্সি দিয়ে আসলে ইন্টারনেট চলে কি না পরীক্ষা করে। (সফল?, তথ্য)"""
     proxies = {'http': proxy_url, 'https': proxy_url}
+    last_err = ''
     for test_url in ('https://ipinfo.io/json', 'https://api.ipify.org?format=json'):
         try:
             r = requests.get(test_url, proxies=proxies, timeout=timeout)
@@ -1352,8 +1367,11 @@ def verify_proxy(proxy_url, timeout=8):
                 except Exception:
                     info = {}
                 return True, info
-        except Exception:
+            last_err = f"HTTP {r.status_code}"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
             continue
+    print(f"Proxy verify failed: {_scrub(last_err)[:220]}")
     return False, {}
 
 def verify_proxies_parallel(urls):
@@ -1412,13 +1430,43 @@ def fetch_cliproxy_list(quantity, state_name):
         print(f"Cliproxy API Error: {e}")
     return urls
 
+TRUSTSOURCE_STATE_CACHE = {}   # 'New York' -> চালু ফরম্যাট (যেমন 'NewYork')
+TRUSTSOURCE_STATE_FAIL = {}    # 'New York' -> কখন পর্যন্ত আবার পরীক্ষা করা হবে না
+
+def trustsource_state_variants(state_name):
+    """দুই শব্দের স্টেট (New York) এর নাম প্রক্সির ইউজারনেমে স্পেস দিয়ে চলে না, তাই কয়েকটা ফরম্যাট চেষ্টা হয়।"""
+    if ' ' not in state_name:
+        return [state_name]
+    camel = state_name.replace(' ', '')
+    return [camel, camel.lower(), state_name.replace(' ', '_'), state_name.replace(' ', '%20')]
+
+def _ts_url(variant):
+    session_id = random.randint(100000, 999999)
+    username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{variant}-session-{session_id}-sessTime-10"
+    return f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}"
+
+def resolve_trustsource_state(state_name):
+    variants = trustsource_state_variants(state_name)
+    if len(variants) == 1:
+        return variants[0]
+    cached = TRUSTSOURCE_STATE_CACHE.get(state_name)
+    if cached:
+        return cached
+    if time.time() < TRUSTSOURCE_STATE_FAIL.get(state_name, 0):
+        return variants[0]
+    results = verify_proxies_parallel([_ts_url(v) for v in variants])
+    for v, (ok, _) in zip(variants, results):
+        if ok:
+            TRUSTSOURCE_STATE_CACHE[state_name] = v
+            print(f"711: working state format for {state_name} = {v}")
+            return v
+    TRUSTSOURCE_STATE_FAIL[state_name] = time.time() + 300
+    print(f"711: no working state format found for {state_name} (tried {len(variants)})")
+    return variants[0]
+
 def build_711_urls(quantity, state_name):
-    urls = []
-    for _ in range(quantity):
-        session_id = random.randint(100000, 999999)
-        username = f"{TRUSTSOURCE_USERNAME}-zone-custom-region-US-st-{state_name}-session-{session_id}-sessTime-10"
-        urls.append(f"http://{username}:{TRUSTSOURCE_PASSWORD}@{TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}")
-    return urls
+    variant = resolve_trustsource_state(state_name)
+    return [_ts_url(variant) for _ in range(quantity)]
 
 def fmt_proxy_detail(info, state_name):
     org = info.get('org')
@@ -1513,6 +1561,7 @@ def process_proxy_purchase(call, kind, state_name, quantity):
             good = []
 
         if not good:
+            print(f"No working proxy for {kind} / {state_name}")
             show_page(
                 call,
                 f"❌ No working proxy available right now for {state_name}.\nYou were not charged. Please try again or choose another state.",
