@@ -1347,6 +1347,9 @@ def handle_state_quantity(call):
 # ==================== PROXY PURCHASE (verified before charge) ====================
 PROXY_UNIT_PRICE = 5.0
 
+LAST_VERIFY_ERROR = {'msg': ''}
+_proxy_alert_last = {}
+
 def _scrub(msg):
     """লগে ইউজারনেম/পাসওয়ার্ড যেন না যায়।"""
     import re
@@ -1371,6 +1374,7 @@ def verify_proxy(proxy_url, timeout=10):
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
             continue
+    LAST_VERIFY_ERROR['msg'] = _scrub(last_err)[:220]
     print(f"Proxy verify failed: {_scrub(last_err)[:220]}")
     return False, {}
 
@@ -1423,10 +1427,13 @@ def fetch_cliproxy_list(quantity, state_name):
                 elif len(parts) == 2:
                     urls.append(f"http://{line}")
             if not urls:
+                LAST_VERIFY_ERROR['msg'] = _scrub(f"Cliproxy unexpected response: {res.text[:150]}")
                 print(f"Cliproxy unexpected response: {res.text[:200]}")
         else:
+            LAST_VERIFY_ERROR['msg'] = _scrub(f"Cliproxy HTTP {res.status_code}: {res.text[:150]}")
             print(f"Cliproxy HTTP {res.status_code}: {res.text[:200]}")
     except Exception as e:
+        LAST_VERIFY_ERROR['msg'] = _scrub(f"Cliproxy API Error: {e}")
         print(f"Cliproxy API Error: {e}")
     return urls
 
@@ -1529,6 +1536,34 @@ PROXY_KINDS = {
     },
 }
 
+def alert_admin_proxy_failure(kind, state_name):
+    """কোনো proxy না পেলে অ্যাডমিনকে কারণসহ জানায় (১০ মিনিটে একবার)। পাসওয়ার্ড/key পাঠায় না।"""
+    now = time.time()
+    if now - _proxy_alert_last.get(kind, 0) < 600:
+        return
+    _proxy_alert_last[kind] = now
+    if kind == '711':
+        cfg = (
+            f"TRUSTSOURCE_USERNAME: {'set' if TRUSTSOURCE_USERNAME else 'MISSING'}\n"
+            f"TRUSTSOURCE_PASSWORD: {'set' if TRUSTSOURCE_PASSWORD else 'MISSING'}\n"
+            f"Gateway: {TRUSTSOURCE_HOST}:{TRUSTSOURCE_PORT}"
+        )
+        provider = "711 Proxy"
+    else:
+        cfg = f"CLIPROXY_KEY: {'set' if CLIPROXY_KEY else 'MISSING'}"
+        provider = "Cliproxy"
+    text = (
+        "⚠️ Proxy purchase failed (nobody was charged)\n\n"
+        f"Provider: {provider}\n"
+        f"State: {state_name}\n"
+        f"{cfg}\n"
+        f"Last error: {LAST_VERIFY_ERROR['msg'] or 'none recorded'}"
+    )
+    try:
+        bot.send_message(ADMIN_ID, text)
+    except Exception as e:
+        print(f"Proxy alert error: {e}")
+
 def process_proxy_purchase(call, kind, state_name, quantity):
     cfg = PROXY_KINDS[kind]
     unit_price = proxy_price(kind)
@@ -1562,6 +1597,7 @@ def process_proxy_purchase(call, kind, state_name, quantity):
 
         if not good:
             print(f"No working proxy for {kind} / {state_name}")
+            alert_admin_proxy_failure(kind, state_name)
             show_page(
                 call,
                 f"❌ No working proxy available right now for {state_name}.\nYou were not charged. Please try again or choose another state.",
